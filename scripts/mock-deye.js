@@ -235,6 +235,8 @@ api.post('/station/latest', (req, res) => {
 
 api.post('/station/history', (req, res) => {
   const { granularity, startAt, endAt } = req.body || {};
+  // Same validation as the real API: frames need endAt, day ranges are limited to 30 days.
+  if (!startAt || !endAt) return res.json(fail('1000002', 'invalid param'));
   if (granularity === 1) {
     const start = dayStart(startAt);
     const now = Math.floor(Date.now() / 1000);
@@ -258,9 +260,12 @@ api.post('/station/history', (req, res) => {
     return res.json(ok({ total: items.length, stationDataItems: items }));
   }
   if (granularity === 2) {
+    if ((dayStart(endAt) - dayStart(startAt)) / 86400 > 30) return res.json(fail('2101012', 'should be within 31 days'));
     const items = [];
     const today = new Date(Date.now() + TZ_OFFSET_H * 3600000).toISOString().slice(0, 10);
-    for (let d = startAt; d < endAt && items.length < 31 && d <= today; ) {
+    // Ranges ending in a month that has not started yet come back empty.
+    if (endAt.slice(0, 7) > today.slice(0, 7)) return res.json(ok({ total: 0, stationDataItems: [] }));
+    for (let d = startAt; d < endAt && d <= today; ) {
       const t = dailyTotals(d);
       const [y, m, day] = d.split('-').map(Number);
       items.push({
@@ -321,6 +326,7 @@ api.post('/device/measurePoints', (req, res) => {
 api.post('/device/history', (req, res) => {
   const { deviceSn, granularity, startAt, measurePoints } = req.body || {};
   if (granularity !== 1) return res.json(fail('1000002', 'granularity not supported by mock'));
+  if (!measurePoints || measurePoints.length > 5) return res.json(fail('1000002', 'list too long'));
   if (deviceSn !== INVERTER_SN) return res.json(ok({ deviceSn, deviceType: 'COLLECTOR', dataList: [] }));
   const wanted = new Set(measurePoints || []);
   const start = dayStart(startAt);

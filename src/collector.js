@@ -10,6 +10,11 @@ const LOCK = 'deye_monitor_collector';
 const META_KEYS = new Set(['code', 'msg', 'success', 'requestId', 'lastUpdateTime', 'collectionTime', 'stationId', 'id', 'timeStamp']);
 const DAILY_META = new Set(['year', 'month', 'day', 'timeStamp', 'date', 'stationId']);
 const TICK_BUDGET_MS = 25000;
+const DAILY_MAX_DAYS = 30;
+const HISTORY_POINTS_PER_REQUEST = 5;
+// Device types /device/history supports; loggers (COLLECTOR), meters etc. have no history.
+const HISTORY_DEVICE_TYPES = new Set(['INVERTER', 'MICRO_INVERTER', 'MICRO_STORAGE_IN_ONE', 'PCS']);
+const hasHistory = (device) => !device.device_type || HISTORY_DEVICE_TYPES.has(String(device.device_type).toUpperCase());
 
 // ---------- helpers ----------
 
@@ -236,8 +241,14 @@ function dailyItemDay(it) {
   return ts ? new Date(ts * 1000).toISOString().slice(0, 10) : null;
 }
 
+// DeyeCloud rejects day ranges longer than 30 days ("should be within 31 days"), and returns
+// nothing when endAt falls in a month that has not started yet, so the end is clamped.
 async function collectDaily(client, station, fromDay, toDayExclusive) {
-  const res = await client.stationHistory(station.id, 2, fromDay, toDayExclusive);
+  const today = dateInZone(Math.floor(Date.now() / 1000), station.timezone);
+  let end = [toDayExclusive, addDays(fromDay, DAILY_MAX_DAYS), addDays(today, 1)].sort()[0];
+  if (end.slice(0, 7) > today.slice(0, 7)) end = today;
+  if (end <= fromDay) return 0;
+  const res = await client.stationHistory(station.id, 2, fromDay, end);
   const rows = [];
   for (const it of firstArray(res, ['stationDataItems', 'dataList', 'list'])) {
     const day = dailyItemDay(it);
@@ -275,12 +286,13 @@ async function measurePointsFor(client, device) {
 }
 
 async function backfillDeviceDay(client, device, day) {
+  if (!hasHistory(device)) return 0;
   const points = await measurePointsFor(client, device);
   if (!points.length) return 0;
   let added = 0;
-  // Requests are chunked to stay well inside any per-request measure point limit.
-  for (let i = 0; i < points.length; i += 40) {
-    const res = await client.deviceHistory(device.sn, 1, day, undefined, points.slice(i, i + 40));
+  // DeyeCloud answers "list too long" for more than 5 measure points per request.
+  for (let i = 0; i < points.length; i += HISTORY_POINTS_PER_REQUEST) {
+    const res = await client.deviceHistory(device.sn, 1, day, addDays(day, 1), points.slice(i, i + HISTORY_POINTS_PER_REQUEST));
     const samples = [];
     for (const frame of firstArray(res, ['dataList', 'list', 'historyDataList'])) {
       const ts = toEpochSeconds(pickField(frame, ['time', 'collectionTime', 'timeStamp']));
@@ -293,7 +305,8 @@ async function backfillDeviceDay(client, device, day) {
 }
 
 async function backfillStationDay(client, station, day) {
-  const res = await client.stationHistory(station.id, 1, day);
+  // Frame requests without endAt are refused with "invalid param".
+  const res = await client.stationHistory(station.id, 1, day, addDays(day, 1));
   const samples = [];
   for (const it of firstArray(res, ['stationDataItems', 'dataList', 'list'])) {
     const ts = toEpochSeconds(pickField(it, ['timeStamp', 'time', 'collectionTime']));
@@ -323,15 +336,15 @@ async function enqueue(items) {
 async function enqueueRange(fromDay, toDay) {
   const days = daysBetween(fromDay, toDay);
   const stations = await db.query('SELECT id FROM stations WHERE enabled = 1');
-  const devices = await db.query('SELECT sn FROM devices WHERE enabled = 1');
+  const devices = (await db.query('SELECT sn, device_type FROM devices WHERE enabled = 1')).filter(hasHistory);
   const items = [];
   for (const day of days) {
     for (const s of stations) items.push({ kind: 'station_day', target: s.id, day });
     for (const d of devices) items.push({ kind: 'device_day', target: d.sn, day });
   }
-  // Daily totals are fetched one month (≤31 days) per request.
+  // Daily totals are fetched up to 30 days per request.
   for (const s of stations) {
-    for (let d = fromDay; d <= toDay; d = addDays(d, 31)) items.push({ kind: 'station_daily', target: s.id, day: d });
+    for (let d = fromDay; d <= toDay; d = addDays(d, DAILY_MAX_DAYS)) items.push({ kind: 'station_daily', target: s.id, day: d });
   }
   await enqueue(items);
   return { days: days.length, items: items.length };
@@ -357,7 +370,7 @@ async function processBackfill(client, maxItems, deadline) {
         if (st) n = await backfillStationDay(client, st, item.day);
       } else if (item.kind === 'station_daily') {
         const st = await db.one('SELECT * FROM stations WHERE id = ?', [item.target]);
-        if (st) n = await collectDaily(client, st, item.day, addDays(item.day, 31));
+        if (st) n = await collectDaily(client, st, item.day, addDays(item.day, DAILY_MAX_DAYS));
       }
       added += n;
       await db.query("UPDATE backfill_queue SET status = 'done', rows_added = ?, message = NULL WHERE id = ?", [n, item.id]);
@@ -378,7 +391,7 @@ async function queueGaps(devicesBefore, pollIntervalMin) {
   const threshold = Math.max(pollIntervalMin * 60 * 3, 30 * 60);
   const items = [];
   for (const d of devicesBefore) {
-    if (!d.last_ts || !d.newTs) continue;
+    if (!d.last_ts || !d.newTs || !hasHistory(d)) continue;
     if (d.newTs - d.last_ts <= threshold) continue;
     const tz = d.timezone;
     const from = dateInZone(Math.max(d.last_ts, now - 31 * 86400), tz);
@@ -453,7 +466,7 @@ async function runTick({ trigger, force, forceDiscover, backfill }) {
       }
 
       const devices = await db.query(
-        'SELECT d.sn, d.station_id, d.last_ts, s.timezone FROM devices d LEFT JOIN stations s ON s.id = d.station_id WHERE d.enabled = 1'
+        'SELECT d.sn, d.station_id, d.device_type, d.last_ts, s.timezone FROM devices d LEFT JOIN stations s ON s.id = d.station_id WHERE d.enabled = 1'
       );
       const dres = await collectDevicesLatest(client, devices);
       readings += dres.added;
