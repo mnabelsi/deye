@@ -41,14 +41,16 @@ function simulate(ts) {
   const load = Math.round(base + evening + morning + spike);
   // Battery state of charge follows a smooth daily pattern.
   const soc = Math.round(Math.max(15, Math.min(100, 45 + 45 * Math.sin(((hour - 9) / 24) * 2 * Math.PI) + 5 * noise(dayIdx))));
+  // A generator on the GEN port runs in the evening.
+  const gen = hour >= 19 && hour < 22 ? Math.round(3000 + 200 * noise(Math.floor(ts / 300) + 11)) : 0;
   let battery = 0; // + discharge / - charge
-  const surplus = pv - load;
+  const surplus = pv + gen - load;
   if (surplus > 0 && soc < 100) battery = -Math.min(surplus, 5000);
   else if (surplus < 0 && soc > 20) battery = Math.min(-surplus, 5000);
-  const grid = load - pv - battery; // + import / - export
+  const grid = load - pv - gen - battery; // + import / - export
   const pv1 = Math.round(pv * 0.55);
   const pv2 = pv - pv1;
-  return { ts, pv, pv1, pv2, load, battery: Math.round(battery), grid: Math.round(grid), soc, hour, dayIdx };
+  return { ts, pv, pv1, pv2, gen, load, battery: Math.round(battery), grid: Math.round(grid), soc, hour, dayIdx };
 }
 
 function dayStart(dateStr) {
@@ -58,11 +60,12 @@ function dayStart(dateStr) {
 
 function dailyTotals(dateStr) {
   const start = dayStart(dateStr);
-  const t = { gen: 0, load: 0, buy: 0, sell: 0, charge: 0, discharge: 0 };
+  const t = { gen: 0, generator: 0, load: 0, buy: 0, sell: 0, charge: 0, discharge: 0 };
   for (let ts = start; ts < start + 86400; ts += 300) {
     const s = simulate(ts);
     const h = 300 / 3600 / 1000;
     t.gen += s.pv * h;
+    t.generator += s.gen * h;
     t.load += s.load * h;
     if (s.grid > 0) t.buy += s.grid * h;
     else t.sell += -s.grid * h;
@@ -70,7 +73,7 @@ function dailyTotals(dateStr) {
     else t.discharge += s.battery * h;
   }
   const r = (v) => Math.round(v * 10) / 10;
-  return { gen: r(t.gen), load: r(t.load), buy: r(t.buy), sell: r(t.sell), charge: r(t.charge), discharge: r(t.discharge) };
+  return { gen: r(t.gen), generator: r(t.generator), load: r(t.load), buy: r(t.buy), sell: r(t.sell), charge: r(t.charge), discharge: r(t.discharge) };
 }
 
 function inverterPoints(ts) {
@@ -117,6 +120,9 @@ function inverterPoints(ts) {
     ['ExternalCTPowerL1', Math.round(s.grid / 3), 'W'],
     ['ExternalCTPowerL2', Math.round(s.grid / 3), 'W'],
     ['ExternalCTPowerL3', s.grid - 2 * Math.round(s.grid / 3), 'W'],
+    ['GenPower', s.gen, 'W'],
+    ['GenVoltage', v(s.gen ? 229 + n(17, 4) : 0), 'V'],
+    ['DailyGenProduction', v(d.generator * frac), 'kWh'],
     ['TotalConsumptionPower', s.load, 'W'],
     ['LoadPowerL1', Math.round(s.load * 0.4), 'W'],
     ['LoadPowerL2', Math.round(s.load * 0.35), 'W'],

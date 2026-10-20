@@ -1,62 +1,12 @@
 import { api } from '../api.js';
-import { $, $$, esc, icon, cssVar, fmtPower, fmtEnergy, fmtNumber, fmtAgo, fmtTime, startOfDay, localDateStr } from '../util.js';
+import { $, $$, esc, icon, cssVar, fmtPower, fmtEnergy, fmtNumber, fmtAgo, fmtTime, fmtValue, startOfDay, localDateStr, modal, toast } from '../util.js';
 import { createTimeChart, renderSeriesTable } from '../charts.js';
+import { ROLES, resolveFlow, describeParts, combineSeries, generatorEnergyToday, candidates } from '../flow.js';
 
-// Station-level keys from /station/latest, with inverter measure points as a fallback
-// for accounts where station data is missing.
-const FALLBACK_KEYS = {
-  generationPower: ['totalsolarpower', 'pvpower', 'totaldcinputpower', 'totalpvpower'],
-  consumptionPower: ['totalconsumptionpower', 'loadpower', 'totalloadpower'],
-  gridPower: ['totalgridpower', 'gridpower', 'totalexternalctpower'],
-  batteryPower: ['batterypower', 'totalbatterypower'],
-  batterySOC: ['soc', 'batterysoc', 'bmssoc'],
-};
-
-function pick(station, key) {
-  const v = station.values[key];
-  if (v !== undefined && v !== null && v !== '') return Number(v);
-  const candidates = FALLBACK_KEYS[key] || [];
-  for (const d of station.devices) {
-    for (const m of d.metrics) {
-      if (candidates.includes(m.key.toLowerCase()) && m.lastValue !== null && m.lastValue !== undefined) return Number(m.lastValue);
-    }
-  }
-  return null;
-}
-
-function metricIdFor(station, key) {
-  if (station.metricIds[key]) return station.metricIds[key];
-  const candidates = FALLBACK_KEYS[key] || [];
-  for (const d of station.devices) for (const m of d.metrics) if (candidates.includes(m.key.toLowerCase())) return m.id;
-  return null;
-}
-
-// Positive = importing from the grid, negative = exporting.
-function gridFlow(station) {
-  const buy = pick(station, 'purchasePower');
-  const sell = pick(station, 'wirePower');
-  if (buy !== null || sell !== null) {
-    if ((buy || 0) > 0) return buy;
-    if ((sell || 0) > 0) return -sell;
-  }
-  const g = pick(station, 'gridPower');
-  return g === null ? (buy !== null || sell !== null ? 0 : null) : g;
-}
-
-// Positive = discharging, negative = charging (Deye's convention for battery power).
-function batteryFlow(station) {
-  const ch = pick(station, 'chargePower');
-  const dis = pick(station, 'dischargePower');
-  if (ch !== null || dis !== null) {
-    if ((ch || 0) > 0) return -ch;
-    if ((dis || 0) > 0) return dis;
-  }
-  const b = pick(station, 'batteryPower');
-  return b === null ? (ch !== null || dis !== null ? 0 : null) : b;
-}
+const TH = 15; // watts below which a flow counts as idle
 
 function kpi({ label, power, color, ic, sub, pct }) {
-  const p = typeof power === 'object' ? power : fmtPower(power);
+  const p = typeof power === 'object' && power !== null ? power : fmtPower(power);
   return `<div class="card kpi" style="--c:var(${color})">
     <div class="kpi-top"><div class="kpi-icon">${icon(ic)}</div><div class="kpi-label">${esc(label)}</div></div>
     <div class="kpi-value">${esc(p.value)}<small>${esc(p.unit)}</small></div>
@@ -65,34 +15,61 @@ function kpi({ label, power, color, ic, sub, pct }) {
   </div>`;
 }
 
-function flowSvg({ solar, load, grid, battery, soc }) {
+const iconInner = (name) => icon(name).replace(/^<svg[^>]*>|<\/svg>$/g, '');
+
+// Line from the edge of node (x1,y1) to the edge of the inverter at (x2,y2).
+function seg(x1, y1, x2, y2, r1 = 31, r2 = 33) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const len = Math.hypot(dx, dy);
+  const ux = dx / len;
+  const uy = dy / len;
+  return `M${(x1 + ux * r1).toFixed(1)} ${(y1 + uy * r1).toFixed(1)} L${(x2 - ux * r2).toFixed(1)} ${(y2 - uy * r2).toFixed(1)}`;
+}
+
+function flowSvg({ solar, load, grid, generator, battery, soc, showGenerator }) {
+  const c = {
+    solar: cssVar('--solar'),
+    load: cssVar('--load'),
+    grid: cssVar('--grid'),
+    export: cssVar('--export'),
+    generator: cssVar('--generator'),
+    battery: cssVar('--battery'),
+    inv: cssVar('--primary'),
+  };
+  const fp = (w) => {
+    const p = fmtPower(w === null || w === undefined ? null : Math.abs(w));
+    return `${p.value} ${p.unit}`.trim();
+  };
   const node = (x, y, label, value, color, ic) => `
     <g>
       <circle class="node-circle" cx="${x}" cy="${y}" r="30" stroke="${color}"/>
-      <g transform="translate(${x - 11}, ${y - 11})" style="color:${color}"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${icon(ic).replace(/^<svg[^>]*>|<\/svg>$/g, '')}</svg></g>
+      <g transform="translate(${x - 11}, ${y - 11})" style="color:${color}"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${iconInner(ic)}</svg></g>
       <text class="node-value" x="${x}" y="${y + 50}">${esc(value)}</text>
       <text class="node-label" x="${x}" y="${y + 66}">${esc(label)}</text>
     </g>`;
-  const line = (d, active, color, reverse) => `
-    <path class="line" d="${d}"/>
-    ${active ? `<path class="line-active ${reverse ? 'rev' : ''}" d="${d}" stroke="${color}"/>` : ''}`;
-  const c = { solar: cssVar('--solar'), load: cssVar('--load'), grid: cssVar('--grid'), export: cssVar('--export'), battery: cssVar('--battery'), inv: cssVar('--primary') };
-  const fp = (w) => {
-    const p = fmtPower(w === null ? null : Math.abs(w));
-    return `${p.value} ${p.unit}`;
-  };
-  const th = 15;
+  // Lines are drawn node → inverter; "rev" animates the other way (power flowing out to the node).
+  const line = (d, active, color, reverse) => `<path class="line" d="${d}"/>${active ? `<path class="line-active ${reverse ? 'rev' : ''}" d="${d}" stroke="${color}"/>` : ''}`;
+  const CX = 220;
+  const CY = 165;
+  const gridPos = showGenerator ? [62, 98] : [62, 165];
+  const genPos = [62, 236];
+  const g = grid || 0;
+  const gridColor = g < -TH ? c.export : c.grid;
+  const gridLabel = g > TH ? 'Grid · importing' : g < -TH ? 'Grid · exporting' : 'Grid';
   return `<svg class="flow" viewBox="0 0 440 345" role="img" aria-label="Power flow diagram">
-    ${line('M220 78 L220 132', (solar || 0) > th, c.solar, false)}
-    ${line('M92 165 L188 165', Math.abs(grid || 0) > th, (grid || 0) < 0 ? c.export : c.grid, (grid || 0) < 0)}
-    ${line('M252 165 L348 165', (load || 0) > th, c.load, false)}
-    ${line('M220 198 L220 236', Math.abs(battery || 0) > th, c.battery, (battery || 0) < 0)}
-    ${node(220, 46, 'Solar', fp(solar), c.solar, 'sun')}
-    ${node(62, 165, (grid || 0) < -th ? 'Grid · exporting' : (grid || 0) > th ? 'Grid · importing' : 'Grid', fp(grid), (grid || 0) < 0 ? c.export : c.grid, 'grid')}
-    ${node(378, 165, 'Home', fp(load), c.load, 'home')}
-    ${node(220, 266, `Battery${soc !== null ? ` · ${fmtNumber(soc, 0)}%` : ''}`, fp(battery), c.battery, 'battery')}
-    <g><circle class="node-circle" cx="220" cy="165" r="32" stroke="${c.inv}"/>
-      <g transform="translate(209,154)" style="color:${c.inv}"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${icon('bolt').replace(/^<svg[^>]*>|<\/svg>$/g, '')}</svg></g></g>
+    ${line(seg(CX, 46, CX, CY), (solar || 0) > TH, c.solar, false)}
+    ${line(seg(gridPos[0], gridPos[1], CX, CY), Math.abs(g) > TH, gridColor, g < 0)}
+    ${showGenerator ? line(seg(genPos[0], genPos[1], CX, CY), (generator || 0) > TH, c.generator, false) : ''}
+    ${line(seg(378, CY, CX, CY), (load || 0) > TH, c.load, true)}
+    ${line(seg(CX, 266, CX, CY), Math.abs(battery || 0) > TH, c.battery, (battery || 0) < 0)}
+    ${node(CX, 46, 'Solar', fp(solar), c.solar, 'sun')}
+    ${node(gridPos[0], gridPos[1], gridLabel, fp(grid), gridColor, 'grid')}
+    ${showGenerator ? node(genPos[0], genPos[1], (generator || 0) > TH ? 'Generator · running' : 'Generator', fp(generator), c.generator, 'plug') : ''}
+    ${node(378, CY, 'Home', fp(load), c.load, 'home')}
+    ${node(CX, 266, `Battery${soc !== null && soc !== undefined ? ` · ${fmtNumber(soc, 0)}%` : ''}`, fp(battery), c.battery, 'battery')}
+    <g><circle class="node-circle" cx="${CX}" cy="${CY}" r="32" stroke="${c.inv}"/>
+      <g transform="translate(${CX - 11},${CY - 11})" style="color:${c.inv}"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${iconInner('bolt')}</svg></g></g>
   </svg>`;
 }
 
@@ -135,7 +112,7 @@ export async function mount(root, ctx) {
   } catch {}
   if (!live.stations.some((s) => s.id === stationId)) stationId = live.stations[0].id;
 
-  const st = { day: startOfDay(), hidden: new Set(), mode: 'chart', panels: [] };
+  const st = { day: startOfDay(), hidden: new Set(), mode: 'chart', panels: [], flow: null };
 
   if (live.stations.length > 1) {
     ctx.actions.innerHTML = `<select id="station-select" class="inline-input">${live.stations.map((s) => `<option value="${esc(s.id)}">${esc(s.name)}</option>`).join('')}</select>`;
@@ -158,7 +135,8 @@ export async function mount(root, ctx) {
       <div class="grid kpis" id="kpis"></div>
       <div class="grid cols-2">
         <div class="card">
-          <div class="card-head"><h2>Power flow</h2><span class="small faint" id="updated"></span></div>
+          <div class="card-head"><h2>Power flow</h2><span class="small faint" id="updated"></span>
+            ${ctx.user.isAdmin ? `<button class="btn sm ghost" id="customize" title="Choose which readings feed each node">${icon('settings')} Customize</button>` : ''}</div>
           <div id="flow"></div>
         </div>
         <div class="card">
@@ -193,98 +171,121 @@ export async function mount(root, ctx) {
 
   function renderLive() {
     const s = station();
-    const solar = pick(s, 'generationPower');
-    const load = pick(s, 'consumptionPower');
-    const grid = gridFlow(s);
-    const battery = batteryFlow(s);
-    const soc = pick(s, 'batterySOC');
+    const f = resolveFlow(s);
+    st.flow = f;
+    const solar = f.solar.value;
+    const load = f.load.value;
+    const grid = f.grid.value;
+    const battery = f.battery.value;
+    const soc = f.soc.value;
+    const generator = f.generator.value;
+    const showGenerator = !f.generator.hidden && f.generator.parts.length > 0;
+    const genToday = generatorEnergyToday(s);
+    const e = s.energy;
     const cap = s.installedCapacity ? Number(s.installedCapacity) * 1000 : null;
     const ageMin = s.lastTs ? (Date.now() / 1000 - s.lastTs) / 60 : null;
+    const kwh = (v) => {
+      const x = fmtEnergy(v);
+      return `${x.value} ${x.unit}`;
+    };
 
     $('#stale', root).innerHTML = ageMin !== null && ageMin > 30
       ? `<div class="alert warn" style="margin:0">${icon('warn')}<div class="grow">Latest data from DeyeCloud is ${esc(fmtAgo(s.lastTs))}. The logger may be offline or the collector is not running.</div></div>`
       : '';
 
-    $('#kpis', root).innerHTML = [
-      kpi({ label: 'Solar', power: solar, color: '--solar', ic: 'sun', sub: cap ? `${fmtNumber((solar / cap) * 100, 0)}% of ${fmtNumber(s.installedCapacity)} kWp` : 'PV generation', pct: cap ? (solar / cap) * 100 : null }),
-      kpi({ label: 'Home load', power: load, color: '--load', ic: 'home', sub: 'Consumption' }),
+    const gridState = grid === null ? '' : grid > TH ? 'Importing' : grid < -TH ? 'Exporting' : 'Idle';
+    const tiles = [
+      kpi({ label: 'Solar', power: solar, color: '--solar', ic: 'sun', sub: cap && solar !== null ? `${fmtNumber((solar / cap) * 100, 0)}% of ${fmtNumber(s.installedCapacity)} kWp` : 'PV generation', pct: cap && solar !== null ? (solar / cap) * 100 : null }),
+      kpi({ label: 'Home load', power: load, color: '--load', ic: 'home', sub: e.consumptionValue !== undefined ? `${esc(kwh(e.consumptionValue))} today` : 'Consumption' }),
       kpi({
-        label: 'Grid',
+        label: grid !== null && grid < -TH ? 'Grid export' : 'Grid import',
         power: grid === null ? null : Math.abs(grid),
-        color: grid !== null && grid < 0 ? '--export' : '--grid',
+        color: grid !== null && grid < -TH ? '--export' : '--grid',
         ic: 'grid',
-        sub: grid === null ? '' : grid > 15 ? 'Importing' : grid < -15 ? 'Exporting' : 'Idle',
+        sub: `${gridState}${e.purchaseValue !== undefined ? `${gridState ? ' · ' : ''}${esc(kwh(e.purchaseValue))} imported today` : ''}`,
       }),
+    ];
+    if (showGenerator) {
+      tiles.push(
+        kpi({
+          label: 'Generator',
+          power: generator,
+          color: '--generator',
+          ic: 'plug',
+          sub: `${(generator || 0) > TH ? 'Running' : 'Off'}${genToday !== null ? ` · ${esc(kwh(genToday))} today` : ''}`,
+        })
+      );
+    }
+    tiles.push(
       kpi({
         label: 'Battery',
         power: battery === null ? null : Math.abs(battery),
         color: '--battery',
         ic: 'battery',
-        sub: battery === null ? '' : battery < -15 ? 'Charging' : battery > 15 ? 'Discharging' : 'Idle',
+        sub: `${battery === null ? '' : battery < -TH ? 'Charging' : battery > TH ? 'Discharging' : 'Idle'}${soc !== null ? ` · ${fmtNumber(soc, 0)}% charged` : ''}`,
+        pct: soc,
       }),
-      kpi({ label: 'State of charge', power: { value: soc === null ? '—' : fmtNumber(soc, 0), unit: soc === null ? '' : '%' }, color: '--battery', ic: 'battery', sub: 'Battery SOC', pct: soc }),
-      kpi({ label: 'Generated today', power: fmtEnergy(s.energy.generationValue), color: '--solar', ic: 'bolt', sub: !s.energyDay ? 'Waiting for daily statistics' : s.energyDay === localDateStr(new Date()) ? 'Daily statistics' : `For ${esc(s.energyDay)}` }),
-    ].join('');
+      kpi({ label: 'Generated today', power: fmtEnergy(e.generationValue), color: '--solar', ic: 'bolt', sub: !s.energyDay ? 'Waiting for daily statistics' : s.energyDay === localDateStr(new Date()) ? 'Daily statistics' : `For ${esc(s.energyDay)}` })
+    );
+    $('#kpis', root).innerHTML = tiles.join('');
 
-    $('#flow', root).innerHTML = flowSvg({ solar, load, grid, battery, soc });
+    $('#flow', root).innerHTML = flowSvg({ solar, load, grid, generator, battery, soc, showGenerator });
     $('#updated', root).textContent = s.lastTs ? `Updated ${fmtAgo(s.lastTs)} · ${fmtTime(s.lastTs, { timeStyle: 'short' })}` : '';
 
-    const e = s.energy;
-    const mini = (label, kwh, color) => {
-      const v = fmtEnergy(kwh);
+    const mini = (label, v, color) => {
+      const x = fmtEnergy(v);
       return `<div class="kpi" style="--c:var(${color});padding:4px 2px"><div class="row" style="gap:7px"><span class="swatch" style="width:10px;height:10px;border-radius:3px;background:var(${color})"></span><span class="kpi-label">${esc(label)}</span></div>
-        <div class="kpi-value" style="font-size:21px">${esc(v.value)}<small>${esc(v.unit)}</small></div></div>`;
+        <div class="kpi-value" style="font-size:21px">${esc(x.value)}<small>${esc(x.unit)}</small></div></div>`;
     };
     $('#today-title', root).textContent = s.energyDay && s.energyDay !== localDateStr(new Date()) ? `Energy · ${s.energyDay}` : 'Energy today';
     $('#today', root).innerHTML = [
       mini('Generated', e.generationValue, '--solar'),
       mini('Consumed', e.consumptionValue, '--load'),
-      mini('Imported', e.purchaseValue, '--grid'),
-      mini('Exported', e.gridValue, '--export'),
+      mini('Grid import', e.purchaseValue, '--grid'),
+      mini('Grid export', e.gridValue, '--export'),
+      ...(genToday !== null ? [mini('Generator', genToday, '--generator')] : []),
       mini('Battery charged', e.chargeValue, '--battery'),
-      mini('Battery discharged', e.dischargeValue, '--gen'),
+      mini('Battery discharged', e.dischargeValue, '--discharge'),
     ].join('');
   }
 
-  // Validated order: solar, battery, load, grid.
-  function chartSeriesDefs(s) {
+  // Order validated for colour-vision separation: solar, battery, generator, load, grid.
+  function chartNodes() {
+    const f = st.flow;
     return [
-      { key: 'generationPower', name: 'Solar', color: '--solar' },
-      { key: 'batteryPower', name: 'Battery', color: '--battery' },
-      { key: 'consumptionPower', name: 'Load', color: '--load' },
-      { key: 'gridPower', name: 'Grid', color: '--grid' },
-    ]
-      .map((d) => ({ ...d, id: metricIdFor(s, d.key) }))
-      .filter((d) => d.id);
+      { role: 'solar', name: 'Solar', color: '--solar' },
+      { role: 'battery', name: 'Battery', color: '--battery' },
+      { role: 'generator', name: 'Generator', color: '--generator' },
+      { role: 'load', name: 'Load', color: '--load' },
+      { role: 'grid', name: 'Grid', color: '--grid' },
+    ].filter((n) => !f[n.role].hidden && f[n.role].parts.length);
   }
 
   async function loadChart() {
-    const s = station();
+    if (!st.flow) return;
     $('#day', root).value = localDateStr(st.day);
     const from = Math.floor(st.day.getTime() / 1000);
     const to = from + 86400;
-    const defs = chartSeriesDefs(s);
-    const socId = metricIdFor(s, 'batterySOC');
-    const ids = [...defs.map((d) => d.id), ...(socId ? [socId] : [])];
-    $('#open-explorer', root).href = `#/charts?m=${ids.join(',')}&r=custom&from=${from}&to=${to}`;
+    const nodes = chartNodes();
+    const soc = st.flow.soc.parts;
+    const ids = [...new Set([...nodes.flatMap((n) => st.flow[n.role].parts.map((p) => p.metric.id)), ...soc.map((p) => p.metric.id)])];
+    $('#open-explorer', root).href = `#/charts?m=${ids.slice(0, 8).join(',')}&r=custom&from=${from}&to=${to}`;
     if (!ids.length) {
+      st.panels = [];
       chart.setData([]);
+      renderPills();
       return;
     }
     chart.loading(true);
     try {
       const data = await api.get('/api/series', { metrics: ids, from, to, bucket: 'auto', tz: new Date().getTimezoneOffset() });
-      const pts = new Map(data.series.map((x) => [x.metric.id, x]));
-      const panels = [
-        {
-          title: 'Power (W)',
-          unit: 'W',
-          series: defs.filter((d) => pts.has(d.id)).map((d) => ({ id: d.id, name: d.name, unit: pts.get(d.id).metric.unit || 'W', color: cssVar(d.color), data: pts.get(d.id).points })),
-        },
-      ];
-      if (socId && pts.has(socId)) {
-        panels.push({ title: 'Battery state of charge (%)', unit: '%', series: [{ id: socId, name: 'SOC', unit: '%', color: cssVar('--battery'), data: pts.get(socId).points }] });
-      }
+      const byId = new Map(data.series.map((x) => [x.metric.id, x.points]));
+      const power = nodes
+        .map((n) => ({ id: `node-${n.role}`, name: n.name, unit: 'W', color: cssVar(n.color), data: combineSeries(st.flow[n.role].parts, byId) }))
+        .filter((x) => x.data.length);
+      const panels = [{ title: 'Power (W) · grid + import / − export · battery + discharge / − charge', unit: 'W', series: power }];
+      const socData = combineSeries(soc, byId);
+      if (socData.length) panels.push({ title: 'Battery state of charge (%)', unit: '%', series: [{ id: 'node-soc', name: 'SOC', unit: '%', color: cssVar('--battery'), data: socData }] });
       st.panels = panels.filter((p) => p.series.length);
       chart.setData(st.panels);
       chart.setHidden([...st.hidden]);
@@ -305,6 +306,47 @@ export async function mount(root, ctx) {
       ? all.map((x) => `<span class="series-pill ${st.hidden.has(x.name) ? 'off' : ''}" data-n="${esc(x.name)}" title="Click to show/hide"><span class="swatch" style="background:${x.color}"></span>${esc(x.name)}</span>`).join('')
       : '<span class="small faint">No power readings stored for this day.</span>';
   }
+
+  // Lets an admin pick the exact reading behind each node when auto-detection guesses wrong.
+  async function customize() {
+    const s = station();
+    const f = resolveFlow(s);
+    const map = s.flowMap || {};
+    const opt = (m) => `${m.label} — ${m.sourceType === 'station' ? 'station' : m.sourceId} · ${fmtValue(m.lastValue, m.unit)}`;
+    const body = ROLES.map(({ role, label, kind, signed }) => {
+      const cur = map[role] || {};
+      const list = candidates(s, kind).sort((a, b) => a.label.localeCompare(b.label));
+      const autoText = f[role].auto ? describeParts(f[role].parts) : 'see list';
+      return `<label class="field">${esc(label)}${signed ? ` <span class="hint">${esc(signed)}</span>` : ''}
+          <select name="${role}">
+            <option value="">Automatic (${esc(autoText)})</option>
+            <option value="hidden" ${cur.hidden ? 'selected' : ''}>Hide this node</option>
+            ${list.map((m) => `<option value="${m.id}" ${cur.metricId === m.id ? 'selected' : ''}>${esc(opt(m))}</option>`).join('')}
+          </select></label>
+        ${signed ? `<label class="check small" style="margin-top:-8px"><input type="checkbox" name="${role}Invert" ${cur.invert ? 'checked' : ''}> Invert sign of the chosen reading</label>` : ''}`;
+    }).join('');
+    const res = await modal({
+      title: 'Customize power flow',
+      submitLabel: 'Save',
+      body: `<p class="small muted" style="margin:0">Pick the reading that feeds each node. Find names and live values under Devices &amp; Readings (e.g. search “gen” or “grid”).</p>${body}`,
+    });
+    if (!res) return;
+    const out = {};
+    for (const { role } of ROLES) {
+      if (res[role] === 'hidden') out[role] = { hidden: true };
+      else if (res[role]) out[role] = { metricId: Number(res[role]), invert: Boolean(res[`${role}Invert`]) };
+    }
+    try {
+      await api.put(`/api/flowmap/${encodeURIComponent(s.id)}`, { map: out });
+      live = await api.get('/api/live');
+      renderLive();
+      await loadChart();
+      toast('Power flow updated', 'ok');
+    } catch (err) {
+      toast(err.message, 'err');
+    }
+  }
+  if ($('#customize', root)) $('#customize', root).onclick = customize;
 
   $('#pills', root).onclick = (e) => {
     const p = e.target.closest('.series-pill');
