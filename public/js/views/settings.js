@@ -62,7 +62,7 @@ export async function mount(root, ctx) {
               <label class="field"><span>Refresh station list every <span class="hint">minutes</span></span><input type="number" name="stationRefreshMinutes" min="10" max="1440"></label>
               <label class="field"><span>Refresh daily energy every <span class="hint">minutes</span></span><input type="number" name="dailyRefreshMinutes" min="10" max="1440"></label>
               <label class="field"><span>Keep readings for <span class="hint">days, 0 = forever</span></span><input type="number" name="retentionDays" min="0"></label>
-              <label class="field"><span>History import speed <span class="hint">days per run</span></span><input type="number" name="backfillPerTick" min="1" max="50"></label>
+              <label class="field"><span>History import speed <span class="hint">downloads per run</span></span><input type="number" name="backfillPerTick" min="1" max="50"></label>
             </div>
             <label class="check"><input type="checkbox" name="autoGapFill"> Automatically re-import missed periods from DeyeCloud history (e.g. after the app was asleep)</label>
             <div class="row">
@@ -284,14 +284,14 @@ export async function mount(root, ctx) {
     const total = b.pending + b.done + b.error + b.running;
     const pct = total ? Math.round(((b.done + b.error) / total) * 100) : 0;
     $('#backfill-status', root).innerHTML = total
-      ? `<div class="row small" style="margin-bottom:6px"><b>${b.done.toLocaleString()} / ${total.toLocaleString()} days imported</b>
+      ? `<div class="row small" style="margin-bottom:6px"><b>${b.done.toLocaleString()} / ${total.toLocaleString()} downloads done</b>
           ${b.error ? `<span class="badge err">${b.error} failed</span>` : ''}${b.pending ? `<span class="badge info">${b.pending} queued</span>` : ''}
           <span class="spacer"></span>
           ${b.error ? '<button class="btn sm" id="bf-retry">Retry failed</button>' : ''}
           ${b.pending || b.error || b.done ? '<button class="btn sm ghost" id="bf-clear">Clear list</button>' : ''}</div>
          <div class="progress"><span style="width:${pct}%"></span></div>
          ${b.lastError ? `<p class="small faint" style="margin-top:6px">Last error: ${esc(b.lastError)}</p>` : ''}
-         ${b.pending ? `<p class="small faint" style="margin-top:6px">Runs in the background, ${esc(settings.collection.backfillPerTick)} day(s) per minute.</p>` : ''}`
+         ${b.pending ? `<p class="small faint" style="margin-top:6px">Runs in the background, up to ${esc(settings.collection.backfillPerTick)} download(s) per minute — one per day for each station and device.</p>` : ''}`
       : '<p class="small faint">No imports yet.</p>';
     const retry = $('#bf-retry', root);
     if (retry) retry.onclick = () => api.post('/api/collector/backfill/retry').then(loadStatus);
