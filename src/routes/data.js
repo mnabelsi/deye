@@ -2,6 +2,8 @@
 
 const express = require('express');
 const db = require('../db');
+const auth = require('../auth');
+const settings = require('../settings');
 const catalog = require('../metrics-catalog');
 
 const router = express.Router();
@@ -215,14 +217,23 @@ router.get('/live', async (req, res) => {
     `SELECT station_id, mkey, value, day FROM daily_energy
       WHERE day = (SELECT MAX(day) FROM daily_energy d2 WHERE d2.station_id = daily_energy.station_id)`
   );
+  const all = await settings.loadAll();
   const out = stations.map((s) => {
     const id = String(s.id);
+    let flowMap = {};
+    try {
+      flowMap = JSON.parse(all[`flow_map:${id}`] || '{}');
+    } catch {
+      flowMap = {};
+    }
     const values = {};
     const metricIds = {};
+    const stationMetrics = [];
     for (const m of metrics) {
       if (m.source_type === 'station' && m.source_id === id) {
         values[m.mkey] = m.value_kind === 'number' ? m.last_value_num : m.last_value_text;
         metricIds[m.mkey] = m.id;
+        stationMetrics.push(toMetric(m));
       }
     }
     const energy = {};
@@ -253,12 +264,37 @@ router.get('/live', async (req, res) => {
       lastTs: s.last_ts,
       values,
       metricIds,
+      metrics: stationMetrics,
       energy,
       energyDay,
+      flowMap,
       devices: devs,
     };
   });
   res.json({ stations: out, serverTime: Math.floor(Date.now() / 1000) });
+});
+
+// Which reading feeds each power-flow node. Missing roles fall back to auto-detection in the UI.
+const FLOW_ROLES = ['solar', 'load', 'grid', 'generator', 'battery', 'soc'];
+router.put('/flowmap/:stationId', auth.requireAdmin, async (req, res) => {
+  const stationId = String(req.params.stationId);
+  const station = await db.one('SELECT id FROM stations WHERE id = ?', [stationId]);
+  if (!station) return res.status(404).json({ error: 'Station not found' });
+  const input = (req.body && req.body.map) || {};
+  const map = {};
+  for (const role of FLOW_ROLES) {
+    const r = input[role];
+    if (!r) continue;
+    if (r.hidden) {
+      map[role] = { hidden: true };
+      continue;
+    }
+    const metricId = parseInt(r.metricId, 10);
+    if (!Number.isFinite(metricId)) continue;
+    map[role] = { metricId, invert: Boolean(r.invert) };
+  }
+  await settings.set({ [`flow_map:${stationId}`]: JSON.stringify(map) });
+  res.json({ map });
 });
 
 router.get('/energy', async (req, res) => {

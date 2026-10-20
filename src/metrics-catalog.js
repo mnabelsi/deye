@@ -35,19 +35,25 @@ const STATION_UNITS = {
   irradiateIntensity: 'W/m²',
 };
 
+// Generator readings: "Gen"/"Generator" at a CamelCase word start, but not "Generation" (PV)
+// and not words that merely contain "gen" such as "ChargingEnergy".
+const GEN = /Generator|generator|Gen(?!erat)|^gen(?!erat)|GEN(?!ERAT)/;
+
+// Order matters: the first matching rule wins.
 const CATEGORY_RULES = [
   ['Temperature', /temp|℃|°c/i],
+  ['Generator', GEN],
   ['Battery', /batt|bms|soc\b|^soc|charg|discharg/i],
   ['Solar', /pv\d*|solar|mppt|dcvoltage|dccurrent|dcpower|generation|production|irradia|^dc/i],
-  ['Grid', /grid|ct(power|current)?|buy|sell|purchase|feed|wire|meter|import|export|^external|^internal/i],
+  ['Grid', /grid|^ct|ctpower|ctcurrent|buy|sell|purchase|feed|wire|meter|import|export|^external|^internal/i],
   ['Load', /load|consum|ups|backup|smartload/i],
-  ['Generator', /\bgen(?!eration)|generator/i],
   ['Inverter', /^ac|inverter|output|freq|rated|phase|power ?factor|inv/i],
   ['Status', /status|state|mode|fault|alarm|warn|error|code|version|protocol|sn$/i],
 ];
 
 function categorize(key, unit, sourceType) {
   if (sourceType === 'station') {
+    if (GEN.test(key)) return 'Generator';
     if (/generation|irradia/i.test(key)) return 'Solar';
     if (/batt|charge|soc/i.test(key)) return 'Battery';
     if (/grid|purchase|wire/i.test(key)) return 'Grid';
