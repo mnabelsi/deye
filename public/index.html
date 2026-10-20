@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Deye Solar Monitor</title>
+  <meta name="description" content="Self-hosted monitoring dashboard for Deye inverters">
+  <link rel="icon" href="/img/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/css/app.css">
+  <script>
+    // Apply the saved theme before first paint to avoid a flash.
+    try {
+      var t = localStorage.getItem('deye-theme');
+      if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+    } catch (e) {}
+  </script>
+</head>
+<body>
+  <div id="app">
+    <div class="boot"><div class="spinner"></div></div>
+  </div>
+  <div id="toasts" aria-live="polite"></div>
+  <script src="/vendor/echarts/echarts.min.js"></script>
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>
