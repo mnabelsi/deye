@@ -10,8 +10,9 @@ Built with plain **Node.js + Express** (no build step) so it deploys as-is on **
 
 ## Features
 
-- **Live overview** – PV, home load, grid import/export, battery charge/discharge and SOC, an animated
-  power-flow diagram, today's energy totals and a zoomable day chart (browse any past day).
+- **Live overview** – PV, home load, grid import/export, generator input, battery charge/discharge and SOC,
+  an animated power-flow diagram, today's energy totals and a zoomable day chart (browse any past day).
+  Readings are matched automatically; admins can pick the exact reading behind each node with **Customize**.
 - **Charts explorer** – pick any of the readings your inverter reports (voltages, currents, temperatures,
   per-MPPT power, BMS data, counters…), grouped and searchable by Solar / Battery / Grid / Load / Inverter / Temperature / Status.
   - Time ranges (6 h → 1 year, or custom), resolution (raw, 5 min … 1 day) and aggregation (avg / min / max).

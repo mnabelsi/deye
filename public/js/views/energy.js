@@ -9,7 +9,7 @@ const SERIES = [
   { key: 'consumptionValue', label: 'Consumption', color: '--load' },
   { key: 'purchaseValue', label: 'Grid import', color: '--grid' },
   { key: 'gridValue', label: 'Grid export', color: '--export' },
-  { key: 'dischargeValue', label: 'Battery discharge', color: '--gen' },
+  { key: 'dischargeValue', label: 'Battery discharge', color: '--discharge' },
 ];
 
 const PRESETS = [
