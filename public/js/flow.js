@@ -1,6 +1,7 @@
 // Works out which stored readings feed each power-flow node (solar, load, grid, generator,
-// battery, SOC). DeyeCloud key names differ between inverter models, so readings are matched
-// by name and unit; an admin can override any node in the Customize dialog (saved per station).
+// battery, SOC), plus the grid and generator voltages that show when each source has power.
+// DeyeCloud key names differ between inverter models, so readings are matched by name and unit;
+// an admin can override any node in the Customize dialog (saved per station).
 //
 // A resolved node is a list of parts { metric, scale }: its value is Σ value × scale. This covers
 // kW → W, inverted signs, grid = purchase − feed-in and per-phase readings that must be summed.
@@ -12,17 +13,25 @@ export const ROLES = [
   { role: 'generator', label: 'Generator', kind: 'power' },
   { role: 'battery', label: 'Battery', kind: 'power', signed: 'discharge is positive, charge negative' },
   { role: 'soc', label: 'Battery SOC', kind: 'percent' },
+  { role: 'gridVoltage', label: 'Grid voltage', kind: 'presence', hint: 'shows when the grid has power' },
+  { role: 'generatorVoltage', label: 'Generator voltage', kind: 'presence', hint: 'shows when the generator runs' },
 ];
+
+// Display names for the two outside sources, e.g. "Kadisha" and "Eshtirak". Set in Customize.
+export const DEFAULT_NAMES = { grid: 'Grid', generator: 'Generator' };
 
 const unitOf = (m) => String(m.unit || '').trim().toLowerCase();
 const isPower = (m) => m.kind === 'number' && ['w', 'kw'].includes(unitOf(m));
 const isPercent = (m) => m.kind === 'number' && unitOf(m) === '%';
+const isPresence = (m) => m.kind === 'number' && ['v', 'hz'].includes(unitOf(m));
 const wattScale = (m) => (unitOf(m) === 'kw' ? 1000 : 1);
 const PHASE = /(l[123]|phase ?[123abc]|[_\s][abc])$/i;
 // "Gen"/"Generator" at a CamelCase word start; not "Generation" (PV) or "ChargingEnergy".
 const GEN = /Generator|generator|Gen(?!erat)|^gen(?!erat)|GEN(?!ERAT)/;
 // Power-unit readings that are limits or settings rather than live flows.
 const NOT_LIVE = /daily|today|run.?time|hours|limit|rated|^max|^min|setting/i;
+// Voltage-unit readings that are thresholds rather than measurements.
+const NOT_MEASURED = /limit|rated|max|min|setting|high|low|protect|start|stop|restore|reconnect|charge/i;
 
 function metricsOf(station) {
   const list = [...(station.metrics || [])];
@@ -51,6 +60,18 @@ function byPattern(metrics, re, exclude) {
 }
 
 const parts = (list, sign = 1) => list.map((m) => ({ metric: m, scale: wattScale(m) * sign }));
+
+// A grid/generator voltage (or else frequency) reading; any one phase is enough to tell power is present.
+function presence(metrics, re, exclude) {
+  for (const unit of ['v', 'hz']) {
+    const hits = metrics.filter((m) => isPresence(m) && unitOf(m) === unit && re.test(m.key) && !(exclude && exclude.test(m.key)) && !NOT_MEASURED.test(m.key));
+    if (hits.length) {
+      hits.sort((a, b) => Number(PHASE.test(a.key)) - Number(PHASE.test(b.key)) || a.key.localeCompare(b.key));
+      return [{ metric: hits[0], scale: 1 }];
+    }
+  }
+  return null;
+}
 
 function stationMetric(station, key) {
   return (station.metrics || []).find((m) => m.sourceType === 'station' && m.key === key && m.kind === 'number') || null;
@@ -107,6 +128,10 @@ function auto(role, station, metrics) {
       const m = byKey(devices, ['soc', 'batterysoc', 'bmssoc', 'batterycapacity'], isPercent);
       return m ? [{ metric: m, scale: 1 }] : null;
     }
+    case 'gridVoltage':
+      return presence(devices, /grid/i, GEN);
+    case 'generatorVoltage':
+      return presence(devices, GEN);
     default:
       return null;
   }
@@ -128,7 +153,8 @@ export function resolveFlow(station) {
     }
     if (o && byId.has(o.metricId)) {
       const m = byId.get(o.metricId);
-      p = [{ metric: m, scale: (role === 'soc' ? 1 : wattScale(m)) * (o.invert ? -1 : 1) }];
+      const kind = ROLES.find((r) => r.role === role).kind;
+      p = [{ metric: m, scale: (kind === 'power' ? wattScale(m) : 1) * (o.invert ? -1 : 1) }];
       isAuto = false;
     } else {
       p = auto(role, station, metrics);
@@ -183,5 +209,12 @@ export function generatorEnergyToday(station) {
 
 /** Candidate readings for the Customize dialog. */
 export function candidates(station, kind) {
-  return metricsOf(station).filter((m) => (kind === 'percent' ? isPercent(m) : isPower(m)));
+  const test = { percent: isPercent, presence: isPresence }[kind] || isPower;
+  return metricsOf(station).filter(test);
+}
+
+/** { grid, generator } display names for a station from /api/live. */
+export function sourceNames(station) {
+  const n = (station && station.flowMap && station.flowMap.names) || {};
+  return { grid: n.grid || DEFAULT_NAMES.grid, generator: n.generator || DEFAULT_NAMES.generator };
 }

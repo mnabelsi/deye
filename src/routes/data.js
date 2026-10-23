@@ -5,6 +5,7 @@ const db = require('../db');
 const auth = require('../auth');
 const settings = require('../settings');
 const catalog = require('../metrics-catalog');
+const { localDayFormatter } = require('../collector');
 
 const router = express.Router();
 
@@ -260,6 +261,8 @@ router.get('/live', async (req, res) => {
       id,
       name: s.name || `Station ${id}`,
       timezone: s.timezone,
+      lat: s.lat,
+      lng: s.lng,
       installedCapacity: s.installed_capacity,
       lastTs: s.last_ts,
       values,
@@ -274,8 +277,10 @@ router.get('/live', async (req, res) => {
   res.json({ stations: out, serverTime: Math.floor(Date.now() / 1000) });
 });
 
-// Which reading feeds each power-flow node. Missing roles fall back to auto-detection in the UI.
-const FLOW_ROLES = ['solar', 'load', 'grid', 'generator', 'battery', 'soc'];
+// Which reading feeds each power-flow node, and the display names of the grid and generator
+// (e.g. "Kadisha", "Eshtirak"). Missing roles fall back to auto-detection in the UI.
+const FLOW_ROLES = ['solar', 'load', 'grid', 'generator', 'battery', 'soc', 'gridVoltage', 'generatorVoltage'];
+const NAMED_SOURCES = ['grid', 'generator'];
 router.put('/flowmap/:stationId', auth.requireAdmin, async (req, res) => {
   const stationId = String(req.params.stationId);
   const station = await db.one('SELECT id FROM stations WHERE id = ?', [stationId]);
@@ -293,9 +298,53 @@ router.put('/flowmap/:stationId', auth.requireAdmin, async (req, res) => {
     if (!Number.isFinite(metricId)) continue;
     map[role] = { metricId, invert: Boolean(r.invert) };
   }
+  const names = {};
+  for (const role of NAMED_SOURCES) {
+    const n = String((req.body && req.body.names && req.body.names[role]) || '').trim().slice(0, 40);
+    if (n) names[role] = n;
+  }
+  if (Object.keys(names).length) map.names = names;
   await settings.set({ [`flow_map:${stationId}`]: JSON.stringify(map) });
   res.json({ map });
 });
+
+// Generator energy per local day (kWh) from its stored power readings: each hour's average
+// power counts as that hour's energy. `parts` are { id, scale } as resolved by the UI (scale
+// turns the reading into watts, e.g. 1000 for kW).
+async function generatorDaily(parts, fromDay, toDay, timeZone) {
+  const from = Date.parse(`${fromDay}T00:00:00Z`) / 1000 - 86400;
+  const to = Date.parse(`${toDay}T00:00:00Z`) / 1000 + 2 * 86400;
+  const rows = await db.query(
+    `SELECT metric_id, FLOOR(ts / 3600) AS h, AVG(value) AS v
+       FROM readings
+      WHERE metric_id IN (?) AND ts BETWEEN ? AND ?
+      GROUP BY metric_id, h`,
+    [parts.map((p) => p.id), from, to]
+  );
+  const scale = new Map(parts.map((p) => [p.id, p.scale]));
+  const hours = new Map();
+  for (const r of rows) hours.set(Number(r.h), (hours.get(Number(r.h)) || 0) + Number(r.v) * scale.get(r.metric_id));
+  // Days with readings count even when the generator was off, so they show 0 rather than "no data".
+  const dayOf = localDayFormatter(timeZone);
+  const days = new Map();
+  for (const [h, w] of hours) {
+    const day = dayOf(h * 3600);
+    if (day < fromDay || day > toDay) continue;
+    days.set(day, (days.get(day) || 0) + Math.max(0, w) / 1000);
+  }
+  return days;
+}
+
+function parseParts(value) {
+  return String(value || '')
+    .split(',')
+    .map((p) => {
+      const [id, scale] = p.split(':');
+      return { id: parseInt(id, 10), scale: scale === undefined ? 1 : Number(scale) };
+    })
+    .filter((p) => Number.isFinite(p.id) && p.id > 0 && Number.isFinite(p.scale))
+    .slice(0, 12);
+}
 
 router.get('/energy', async (req, res) => {
   const stationId = String(req.query.stationId || '');
@@ -324,10 +373,26 @@ router.get('/energy', async (req, res) => {
     periods.get(r.period)[r.mkey] = r.value === null ? null : Math.round(Number(r.value) * 100) / 100;
     keys.add(r.mkey);
   }
+
+  // DeyeCloud's daily statistics have no generator total, so it is computed from the readings.
+  const genParts = parseParts(req.query.gen);
+  if (genParts.length) {
+    const station = stationId ? await db.one('SELECT timezone FROM stations WHERE id = ?', [stationId]) : null;
+    const tz = (station && station.timezone) || String(req.query.tz || '') || null;
+    const days = await generatorDaily(genParts, from === '1970-01-01' ? '2000-01-01' : from, to === '2999-12-31' ? localDayFormatter(tz)(Date.now() / 1000) : to, tz);
+    const len = { day: 10, month: 7, year: 4 }[group];
+    const sums = new Map();
+    for (const [day, kwh] of days) sums.set(day.slice(0, len), (sums.get(day.slice(0, len)) || 0) + kwh);
+    for (const [period, kwh] of sums) {
+      if (!periods.has(period)) periods.set(period, { period });
+      periods.get(period).generatorValue = Math.round(kwh * 100) / 100;
+    }
+    keys.add('generatorValue');
+  }
   res.json({
     group,
-    keys: [...keys].map((k) => ({ key: k, label: catalog.label(k, null, 'station') })),
-    rows: [...periods.values()],
+    keys: [...keys].map((k) => ({ key: k, label: k === 'generatorValue' ? 'Generator (day)' : catalog.label(k, null, 'station') })),
+    rows: [...periods.values()].sort((a, b) => (a.period < b.period ? -1 : a.period > b.period ? 1 : 0)),
   });
 });
 

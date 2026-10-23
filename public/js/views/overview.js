@@ -1,7 +1,7 @@
 import { api } from '../api.js';
 import { $, $$, esc, icon, cssVar, fmtPower, fmtEnergy, fmtNumber, fmtAgo, fmtTime, fmtValue, startOfDay, localDateStr, modal, toast } from '../util.js';
 import { createTimeChart, renderSeriesTable } from '../charts.js';
-import { ROLES, resolveFlow, describeParts, combineSeries, generatorEnergyToday, candidates } from '../flow.js';
+import { ROLES, DEFAULT_NAMES, resolveFlow, describeParts, combineSeries, generatorEnergyToday, candidates, sourceNames } from '../flow.js';
 
 const TH = 15; // watts below which a flow counts as idle
 
@@ -27,7 +27,7 @@ function seg(x1, y1, x2, y2, r1 = 31, r2 = 33) {
   return `M${(x1 + ux * r1).toFixed(1)} ${(y1 + uy * r1).toFixed(1)} L${(x2 - ux * r2).toFixed(1)} ${(y2 - uy * r2).toFixed(1)}`;
 }
 
-function flowSvg({ solar, load, grid, generator, battery, soc, showGenerator }) {
+function flowSvg({ solar, load, grid, generator, battery, soc, showGenerator, names }) {
   const c = {
     solar: cssVar('--solar'),
     load: cssVar('--load'),
@@ -56,7 +56,7 @@ function flowSvg({ solar, load, grid, generator, battery, soc, showGenerator }) 
   const genPos = [62, 236];
   const g = grid || 0;
   const gridColor = g < -TH ? c.export : c.grid;
-  const gridLabel = g > TH ? 'Grid · importing' : g < -TH ? 'Grid · exporting' : 'Grid';
+  const gridLabel = g > TH ? `${names.grid} · importing` : g < -TH ? `${names.grid} · exporting` : names.grid;
   return `<svg class="flow" viewBox="0 0 440 345" role="img" aria-label="Power flow diagram">
     ${line(seg(CX, 46, CX, CY), (solar || 0) > TH, c.solar, false)}
     ${line(seg(gridPos[0], gridPos[1], CX, CY), Math.abs(g) > TH, gridColor, g < 0)}
@@ -65,7 +65,7 @@ function flowSvg({ solar, load, grid, generator, battery, soc, showGenerator }) 
     ${line(seg(CX, 266, CX, CY), Math.abs(battery || 0) > TH, c.battery, (battery || 0) < 0)}
     ${node(CX, 46, 'Solar', fp(solar), c.solar, 'sun')}
     ${node(gridPos[0], gridPos[1], gridLabel, fp(grid), gridColor, 'grid')}
-    ${showGenerator ? node(genPos[0], genPos[1], (generator || 0) > TH ? 'Generator · running' : 'Generator', fp(generator), c.generator, 'plug') : ''}
+    ${showGenerator ? node(genPos[0], genPos[1], (generator || 0) > TH ? `${names.generator} · running` : names.generator, fp(generator), c.generator, 'plug') : ''}
     ${node(378, CY, 'Home', fp(load), c.load, 'home')}
     ${node(CX, 266, `Battery${soc !== null && soc !== undefined ? ` · ${fmtNumber(soc, 0)}%` : ''}`, fp(battery), c.battery, 'battery')}
     <g><circle class="node-circle" cx="${CX}" cy="${CY}" r="32" stroke="${c.inv}"/>
@@ -181,6 +181,8 @@ export async function mount(root, ctx) {
     const generator = f.generator.value;
     const showGenerator = !f.generator.hidden && f.generator.parts.length > 0;
     const genToday = generatorEnergyToday(s);
+    const names = sourceNames(s);
+    const namedGrid = names.grid !== DEFAULT_NAMES.grid;
     const e = s.energy;
     const cap = s.installedCapacity ? Number(s.installedCapacity) * 1000 : null;
     const ageMin = s.lastTs ? (Date.now() / 1000 - s.lastTs) / 60 : null;
@@ -198,7 +200,7 @@ export async function mount(root, ctx) {
       kpi({ label: 'Solar', power: solar, color: '--solar', ic: 'sun', sub: cap && solar !== null ? `${fmtNumber((solar / cap) * 100, 0)}% of ${fmtNumber(s.installedCapacity)} kWp` : 'PV generation', pct: cap && solar !== null ? (solar / cap) * 100 : null }),
       kpi({ label: 'Home load', power: load, color: '--load', ic: 'home', sub: e.consumptionValue !== undefined ? `${esc(kwh(e.consumptionValue))} today` : 'Consumption' }),
       kpi({
-        label: grid !== null && grid < -TH ? 'Grid export' : 'Grid import',
+        label: namedGrid ? names.grid : grid !== null && grid < -TH ? 'Grid export' : 'Grid import',
         power: grid === null ? null : Math.abs(grid),
         color: grid !== null && grid < -TH ? '--export' : '--grid',
         ic: 'grid',
@@ -208,7 +210,7 @@ export async function mount(root, ctx) {
     if (showGenerator) {
       tiles.push(
         kpi({
-          label: 'Generator',
+          label: names.generator,
           power: generator,
           color: '--generator',
           ic: 'plug',
@@ -229,7 +231,7 @@ export async function mount(root, ctx) {
     );
     $('#kpis', root).innerHTML = tiles.join('');
 
-    $('#flow', root).innerHTML = flowSvg({ solar, load, grid, generator, battery, soc, showGenerator });
+    $('#flow', root).innerHTML = flowSvg({ solar, load, grid, generator, battery, soc, showGenerator, names });
     $('#updated', root).textContent = s.lastTs ? `Updated ${fmtAgo(s.lastTs)} · ${fmtTime(s.lastTs, { timeStyle: 'short' })}` : '';
 
     const mini = (label, v, color) => {
@@ -241,23 +243,24 @@ export async function mount(root, ctx) {
     $('#today', root).innerHTML = [
       mini('Generated', e.generationValue, '--solar'),
       mini('Consumed', e.consumptionValue, '--load'),
-      mini('Grid import', e.purchaseValue, '--grid'),
-      mini('Grid export', e.gridValue, '--export'),
-      ...(genToday !== null ? [mini('Generator', genToday, '--generator')] : []),
+      mini(namedGrid ? names.grid : 'Grid import', e.purchaseValue, '--grid'),
+      mini(`${names.grid} export`, e.gridValue, '--export'),
+      ...(genToday !== null ? [mini(names.generator, genToday, '--generator')] : []),
       mini('Battery charged', e.chargeValue, '--battery'),
       mini('Battery discharged', e.dischargeValue, '--discharge'),
     ].join('');
   }
 
-  // Order validated for colour-vision separation: solar, battery, generator, load, grid.
+  // Order validated for colour-vision separation: battery, solar, generator, load, grid.
   function chartNodes() {
     const f = st.flow;
+    const names = sourceNames(station());
     return [
-      { role: 'solar', name: 'Solar', color: '--solar' },
       { role: 'battery', name: 'Battery', color: '--battery' },
-      { role: 'generator', name: 'Generator', color: '--generator' },
+      { role: 'solar', name: 'Solar', color: '--solar' },
+      { role: 'generator', name: names.generator, color: '--generator' },
       { role: 'load', name: 'Load', color: '--load' },
-      { role: 'grid', name: 'Grid', color: '--grid' },
+      { role: 'grid', name: names.grid, color: '--grid' },
     ].filter((n) => !f[n.role].hidden && f[n.role].parts.length);
   }
 
@@ -313,11 +316,14 @@ export async function mount(root, ctx) {
     const f = resolveFlow(s);
     const map = s.flowMap || {};
     const opt = (m) => `${m.label} — ${m.sourceType === 'station' ? 'station' : m.sourceId} · ${fmtValue(m.lastValue, m.unit)}`;
-    const body = ROLES.map(({ role, label, kind, signed }) => {
+    const names = map.names || {};
+    const nameField = (role, example) => `<label class="field">${esc(DEFAULT_NAMES[role])} name <span class="hint">e.g. ${esc(example)}</span>
+        <input type="text" name="name_${role}" maxlength="40" placeholder="${esc(DEFAULT_NAMES[role])}" value="${esc(names[role] || '')}"></label>`;
+    const body = ROLES.map(({ role, label, kind, signed, hint }) => {
       const cur = map[role] || {};
       const list = candidates(s, kind).sort((a, b) => a.label.localeCompare(b.label));
       const autoText = f[role].auto ? describeParts(f[role].parts) : 'see list';
-      return `<label class="field">${esc(label)}${signed ? ` <span class="hint">${esc(signed)}</span>` : ''}
+      return `<label class="field">${esc(label)}${signed || hint ? ` <span class="hint">${esc(signed || hint)}</span>` : ''}
           <select name="${role}">
             <option value="">Automatic (${esc(autoText)})</option>
             <option value="hidden" ${cur.hidden ? 'selected' : ''}>Hide this node</option>
@@ -328,7 +334,8 @@ export async function mount(root, ctx) {
     const res = await modal({
       title: 'Customize power flow',
       submitLabel: 'Save',
-      body: `<p class="small muted" style="margin:0">Pick the reading that feeds each node. Find names and live values under Devices &amp; Readings (e.g. search “gen” or “grid”).</p>${body}`,
+      body: `<div class="grid cols-2" style="gap:12px">${nameField('grid', 'Kadisha')}${nameField('generator', 'Eshtirak')}</div>
+        <p class="small muted" style="margin:0">Pick the reading that feeds each node. Find names and live values under Devices &amp; Readings (e.g. search “gen” or “grid”).</p>${body}`,
     });
     if (!res) return;
     const out = {};
@@ -337,7 +344,7 @@ export async function mount(root, ctx) {
       else if (res[role]) out[role] = { metricId: Number(res[role]), invert: Boolean(res[`${role}Invert`]) };
     }
     try {
-      await api.put(`/api/flowmap/${encodeURIComponent(s.id)}`, { map: out });
+      await api.put(`/api/flowmap/${encodeURIComponent(s.id)}`, { map: out, names: { grid: res.name_grid, generator: res.name_generator } });
       live = await api.get('/api/live');
       renderLive();
       await loadChart();

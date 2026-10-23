@@ -32,19 +32,31 @@ function pickField(obj, names) {
 
 const pad = (n) => String(n).padStart(2, '0');
 
-// Calendar date of an instant in a given IANA time zone (falls back to server local time).
-function dateInZone(epochSec, timeZone) {
-  const d = new Date(epochSec * 1000);
+// Returns a function giving the calendar date (YYYY-MM-DD) of an epoch instant in an IANA time
+// zone, falling back to server local time. Reuse it for many conversions: building the
+// formatter is the slow part.
+function localDayFormatter(timeZone) {
   if (timeZone) {
     try {
-      const parts = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(d);
-      const get = (t) => parts.find((p) => p.type === t).value;
-      return `${get('year')}-${get('month')}-${get('day')}`;
+      const fmt = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' });
+      return (epochSec) => {
+        const parts = fmt.formatToParts(new Date(epochSec * 1000));
+        const get = (t) => parts.find((p) => p.type === t).value;
+        return `${get('year')}-${get('month')}-${get('day')}`;
+      };
     } catch {
       /* invalid zone */
     }
   }
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return (epochSec) => {
+    const d = new Date(epochSec * 1000);
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  };
+}
+
+// Calendar date of an instant in a given IANA time zone (falls back to server local time).
+function dateInZone(epochSec, timeZone) {
+  return localDayFormatter(timeZone)(epochSec);
 }
 
 function addDays(dateStr, n) {
@@ -539,4 +551,4 @@ async function testConnection(cfg) {
   return { stations: total, message: `Signed in. Found ${total} station(s)${names ? `: ${names}` : ''}.` };
 }
 
-module.exports = { tick, testConnection, enqueueRange, discover, dateInZone, addDays, daysBetween };
+module.exports = { tick, testConnection, enqueueRange, discover, dateInZone, localDayFormatter, addDays, daysBetween };
