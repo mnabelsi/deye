@@ -1,16 +1,22 @@
 import { api } from '../api.js';
 import { $, $$, esc, icon, cssVar, fmtEnergy, fmtNumber, localDateStr } from '../util.js';
 import { createBarChart } from '../charts.js';
+import { DEFAULT_NAMES, resolveFlow, sourceNames } from '../flow.js';
 
-// Fixed order validated for colour-vision deficiency separation (see css tokens).
-const SERIES = [
-  { key: 'generationValue', label: 'Generation', color: '--solar' },
-  { key: 'chargeValue', label: 'Battery charge', color: '--battery' },
-  { key: 'consumptionValue', label: 'Consumption', color: '--load' },
-  { key: 'purchaseValue', label: 'Grid import', color: '--grid' },
-  { key: 'gridValue', label: 'Grid export', color: '--export' },
-  { key: 'dischargeValue', label: 'Battery discharge', color: '--discharge' },
-];
+// Where the electricity came from (solar, grid, generator) and how much was used. The first four
+// are in an order validated for colour-vision separation; the rest start hidden.
+function seriesFor(names, hasGenerator) {
+  const gridName = names.grid === DEFAULT_NAMES.grid ? 'Grid import' : names.grid;
+  return [
+    { key: 'generationValue', label: 'Solar', color: '--solar' },
+    ...(hasGenerator ? [{ key: 'generatorValue', label: names.generator, color: '--generator' }] : []),
+    { key: 'consumptionValue', label: 'Consumption', color: '--load' },
+    { key: 'purchaseValue', label: gridName, color: '--grid' },
+    { key: 'gridValue', label: `${names.grid} export`, color: '--export' },
+    { key: 'chargeValue', label: 'Battery charge', color: '--battery' },
+    { key: 'dischargeValue', label: 'Battery discharge', color: '--discharge' },
+  ];
+}
 
 const PRESETS = [
   ['month', 'This month', 'day'],
@@ -34,17 +40,27 @@ function presetRange(key) {
 }
 
 export async function mount(root, ctx) {
-  const sources = await ctx.store.sources();
+  const [sources, live] = await Promise.all([ctx.store.sources(), api.get('/api/live')]);
   const st = {
     station: ctx.params.get('station') || (sources.stations[0] && sources.stations[0].id) || '',
     preset: ctx.params.get('p') || 'month',
     group: ctx.params.get('g') || 'day',
     from: null,
     to: null,
-    hidden: new Set(['chargeValue', 'dischargeValue']),
+    hidden: new Set(['gridValue', 'chargeValue', 'dischargeValue']),
     mode: 'chart',
     rows: [],
   };
+
+  // The generator's energy is computed from whichever reading feeds the Overview's generator node.
+  function sourcesFor(stationId) {
+    const s = live.stations.find((x) => x.id === stationId);
+    const gen = s ? resolveFlow(s).generator : null;
+    const genParts = gen && !gen.hidden ? gen.parts : [];
+    return { names: sourceNames(s), gen: genParts.map((p) => `${p.metric.id}:${p.scale}`).join(',') };
+  }
+  let src = sourcesFor(st.station);
+  let SERIES = seriesFor(src.names, Boolean(src.gen));
   [st.from, st.to] = presetRange(st.preset);
 
   root.innerHTML = `
@@ -69,7 +85,7 @@ export async function mount(root, ctx) {
         <div class="row" style="margin-bottom:10px"><div class="series-pills" id="pills"></div></div>
         <div class="chart" id="chart"></div>
         <div id="table" class="hidden"></div>
-        <p class="small faint" style="margin-top:8px">Daily totals come from DeyeCloud's station statistics. Import older history from Settings → Import history.</p>
+        <p class="small faint" style="margin-top:8px" id="footnote"></p>
       </div>
     </div>`;
 
@@ -96,7 +112,13 @@ export async function mount(root, ctx) {
     const rows = st.rows;
     const sum = (k) => rows.reduce((n, r) => n + (Number(r[k]) || 0), 0);
     const t = Object.fromEntries(SERIES.map((s) => [s.key, sum(s.key)]));
-    const selfSufficiency = t.consumptionValue > 0 ? Math.max(0, Math.min(100, (1 - t.purchaseValue / t.consumptionValue) * 100)) : null;
+    const bought = t.purchaseValue + (t.generatorValue || 0);
+    const supply = t.generationValue + bought;
+    const share = (v) => (supply > 0 ? `${fmtNumber((v / supply) * 100, 0)}% of supply` : '');
+    const { names } = src;
+    const gridName = names.grid === DEFAULT_NAMES.grid ? 'Grid import' : names.grid;
+    const boughtFrom = src.gen ? `${names.grid} or ${names.generator}` : names.grid;
+    const selfSufficiency = t.consumptionValue > 0 ? Math.max(0, Math.min(100, (1 - bought / t.consumptionValue) * 100)) : null;
     const selfConsumption = t.generationValue > 0 ? Math.max(0, Math.min(100, (1 - t.gridValue / t.generationValue) * 100)) : null;
     const tile = (label, kwh, color, ic, sub) => {
       const e = fmtEnergy(kwh);
@@ -106,14 +128,20 @@ export async function mount(root, ctx) {
     const pct = (label, v, color, ic, sub) => `<div class="card kpi" style="--c:var(${color})"><div class="kpi-top"><div class="kpi-icon">${icon(ic)}</div><div class="kpi-label">${esc(label)}</div></div>
       <div class="kpi-value">${v === null ? '—' : fmtNumber(v, 0)}<small>%</small></div><div class="kpi-sub">${esc(sub)}</div>
       <div class="bar"><span style="width:${v || 0}%"></span></div></div>`;
+    // Export and self-consumption only matter when something was exported.
+    const exported = t.gridValue > 0.05;
     $('#totals', root).innerHTML = [
-      tile('Generated', t.generationValue, '--solar', 'sun', `${rows.length} ${st.group === 'day' ? 'days' : st.group === 'month' ? 'months' : 'years'}`),
-      tile('Consumed', t.consumptionValue, '--load', 'home'),
-      tile('Imported', t.purchaseValue, '--grid', 'grid'),
-      tile('Exported', t.gridValue, '--export', 'grid'),
-      pct('Self-sufficiency', selfSufficiency, '--battery', 'battery', 'Share of consumption not bought from the grid'),
-      pct('Self-consumption', selfConsumption, '--solar', 'bolt', 'Share of generation used on site'),
+      tile('Consumed', t.consumptionValue, '--load', 'home', `${rows.length} ${st.group === 'day' ? 'days' : st.group === 'month' ? 'months' : 'years'}`),
+      tile('Solar', t.generationValue, '--solar', 'sun', share(t.generationValue)),
+      tile(gridName, t.purchaseValue, '--grid', 'grid', share(t.purchaseValue)),
+      ...(src.gen ? [tile(names.generator, t.generatorValue, '--generator', 'plug', share(t.generatorValue))] : []),
+      ...(exported ? [tile(`${names.grid} export`, t.gridValue, '--export', 'grid')] : []),
+      pct('Self-sufficiency', selfSufficiency, '--battery', 'battery', `Share of consumption not bought from ${boughtFrom}`),
+      ...(exported ? [pct('Self-consumption', selfConsumption, '--solar', 'bolt', 'Share of solar used on site')] : []),
     ].join('');
+    $('#footnote', root).textContent = `Solar, consumption and ${names.grid === DEFAULT_NAMES.grid ? 'grid import' : names.grid} come from DeyeCloud's daily statistics${
+      src.gen ? `; ${names.generator} is worked out from its stored power readings (—: none stored for that period)` : ''
+    }. Import older history from Settings → Import history.`;
 
     const visible = SERIES.filter((s) => !st.hidden.has(s.key));
     chart.setData({
@@ -135,7 +163,14 @@ export async function mount(root, ctx) {
   async function load() {
     chart.loading(true);
     try {
-      const res = await api.get('/api/energy', { stationId: st.station, from: st.from, to: st.to, group: st.group });
+      const res = await api.get('/api/energy', {
+        stationId: st.station,
+        from: st.from,
+        to: st.to,
+        group: st.group,
+        gen: src.gen,
+        tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      });
       st.rows = res.rows;
       render();
     } finally {
@@ -185,6 +220,9 @@ export async function mount(root, ctx) {
   if ($('#station', root)) {
     $('#station', root).onchange = (e) => {
       st.station = e.target.value;
+      src = sourcesFor(st.station);
+      SERIES = seriesFor(src.names, Boolean(src.gen));
+      renderPills();
       load();
     };
   }

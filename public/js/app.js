@@ -5,6 +5,7 @@ import { renderLogin } from './views/login.js';
 import * as overview from './views/overview.js';
 import * as explorer from './views/explorer.js';
 import * as energy from './views/energy.js';
+import * as insights from './views/insights.js';
 import * as devices from './views/devices.js';
 import * as settingsView from './views/settings.js';
 
@@ -12,6 +13,7 @@ const ROUTES = {
   overview: { view: overview, title: 'Overview', icon: 'overview' },
   charts: { view: explorer, title: 'Charts', icon: 'chart' },
   energy: { view: energy, title: 'Energy', icon: 'energy' },
+  insights: { view: insights, title: 'Battery insights', icon: 'insight' },
   devices: { view: devices, title: 'Devices & Readings', icon: 'device' },
   settings: { view: settingsView, title: 'Settings', icon: 'settings' },
 };

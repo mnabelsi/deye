@@ -19,8 +19,15 @@ Built with plain **Node.js + Express** (no build step) so it deploys as-is on **
   - Mouse-wheel / pinch zoom, drag to pan, box zoom, range slider; zooming in automatically loads finer data.
   - Click a series pill to hide/show it; readings with different units are drawn as stacked, synchronised panels.
   - Line / area / step / bar styles, table view, CSV export, shareable links, and saved views per user.
-- **Energy** – daily / monthly / yearly bars for generation, consumption, grid import/export and battery
-  charge/discharge, plus self-sufficiency and self-consumption.
+- **Energy** – daily / monthly / yearly totals of what you care about: solar, grid, generator and consumption,
+  each source's share of supply, and self-sufficiency (battery charge/discharge and export can be switched on).
+  Generator energy is worked out from its stored power readings, since DeyeCloud's daily statistics have none.
+- **Battery insights** – from your stored hourly history (e.g. the last 12 months), the battery size you would need to be
+  fully self-sufficient on solar, to never need the generator (solar + grid), or to never need the grid (solar +
+  generator). Shows how much each size covers, how your current battery (estimated from the data) does, night use,
+  hours each source had power, and solar lost because the battery was full. See [How battery sizing works](#how-battery-sizing-works).
+- **Your names for each source** – call the grid and generator what you call them (e.g. *Kadisha* and *Eshtirak*) in
+  Overview → **Customize**; every page uses those names.
 - **Devices & readings** – every station and device (inverter, logger, meter, battery…) with all current
   values, and a log of state changes (running mode, battery status, faults…).
 - **Complete history** – polls DeyeCloud every few minutes, **imports past history** from DeyeCloud
@@ -50,7 +57,9 @@ npm run mock    # starts http://localhost:4100/v1.0
 ```
 
 In Settings choose **Data center → Custom URL…** `http://localhost:4100/v1.0`, App ID `demo`,
-App Secret `demo`, email `demo@example.com`, password `demo`. Then import a few days of history.
+App Secret `demo`, email `demo@example.com`, password `demo`. Then import some history (a year for Battery insights).
+The mock models a 6.6 kWp zero-export system with a 10.24 kWh battery, a grid with daily outages and a 10 A
+generator on the GEN port, so the battery-sizing results can be checked against known values.
 
 ## Deploying on Hostinger
 
@@ -165,6 +174,28 @@ The app only **reads** data. It never sends control commands to your inverter.
 **Storage estimate:** a hybrid inverter reports roughly 60–150 numeric readings. At 5-minute polling that is
 about 20–45k rows a day, roughly 1–2 MB/day or 0.4–0.7 GB/year per inverter. Set *Keep readings for* in
 Settings if your hosting plan has a database size limit.
+
+## How battery sizing works
+
+The **Battery insights** page replays every stored hour of the chosen period with a battery of a given size:
+
+1. Solar feeds the home first; the battery covers any shortfall; while an allowed source (grid or generator) has
+   power it runs the home and recharges the battery, at up to the charging limit set under *Assumptions*. Whatever is
+   still missing would have needed the source you want to drop. The smallest battery that leaves nothing missing is
+   the answer (found by bisection). The period is replayed twice so the battery does not start with free charge.
+2. **Throttled solar.** With zero export the inverter throttles the panels once the battery is full, so measured
+   solar understates what a bigger battery could store. In those hours the possible output is estimated from the
+   sun's position at the station's location (from DeyeCloud), this array's output in unthrottled hours and that
+   day's weather.
+3. **When each source had power** comes from its voltage reading (picked automatically; override in Overview →
+   Customize). Without one, on-hours are taken from when the source delivered power, which undercounts them.
+4. **Your current battery** is estimated from how far the state of charge drops per kWh discharged; you can enter
+   the real size instead.
+
+Results are sizes to buy (rated kWh), using a usable share (90% for LiFePO4), 90% round-trip efficiency and 0.5C
+charging by default. The analysis uses hourly averages, so check separately that the inverter and battery can deliver
+your peak power. It needs hourly history: import the period first (Settings → Import history, or the button on the
+page). The model is plain JavaScript in `public/js/insights-model.js` and runs in the browser.
 
 ## Security notes
 

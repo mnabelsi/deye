@@ -26,7 +26,7 @@
   --load: #6250d6;
   --grid: #e34948;
   --export: #2a78d6;
-  --generator: #eb6834;
+  --generator: #e87ba4;
   --discharge: #008300;
   /* Categorical slots for user-selected series, assigned in fixed order. */
   --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100;
@@ -71,7 +71,7 @@
     --load: #9085e9;
     --grid: #e66767;
     --export: #3987e5;
-    --generator: #d95926;
+    --generator: #d55181;
     --discharge: #008300;
     --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
     --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
@@ -107,7 +107,7 @@
   --load: #9085e9;
   --grid: #e66767;
   --export: #3987e5;
-  --generator: #d95926;
+  --generator: #d55181;
   --discharge: #008300;
   --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
   --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
@@ -430,6 +430,22 @@ table.table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .kv dd { margin: 0; font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
 .copy-field { display: flex; gap: 6px; }
 .copy-field input { font-family: var(--mono); font-size: 12px; }
+
+/* ---------- Battery insights ---------- */
+.grid.scenarios { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+.grid.fields { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+.grid.facts { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (min-width: 1560px) { .grid.facts { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
+@media (max-width: 760px) { .grid.facts { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.scenario { display: flex; flex-direction: column; gap: 4px; }
+.scenario-title { display: flex; align-items: center; gap: 8px; }
+.scenario-title .swatch { width: 10px; height: 10px; border-radius: 50%; background: var(--c); flex-shrink: 0; }
+.scenario .big { font-size: 28px; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; margin: 10px 0 2px; }
+.scenario .big small { font-size: 14px; font-weight: 600; color: var(--text-2); margin-left: 5px; letter-spacing: 0; }
+.scenario .facts { margin: 12px 0 0; padding: 12px 0 0; border-top: 1px solid var(--border); list-style: none; display: grid; gap: 8px; font-size: 13px; color: var(--text-2); }
+.scenario .facts b { color: var(--text); }
+.scenario .facts svg { width: 14px; height: 14px; color: var(--success); vertical-align: -2px; margin-right: 2px; }
+.series-pills.static .series-pill { cursor: default; padding-right: 10px; }
 
 /* ---------- Responsive ---------- */
 @media (max-width: 1180px) {

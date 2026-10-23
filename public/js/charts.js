@@ -400,6 +400,109 @@ export function createBarChart(el, opts = {}) {
   return api;
 }
 
+/**
+ * Line chart over a numeric x axis, e.g. coverage (%) by battery size (kWh).
+ * data: { x: [..], xUnit, yUnit, series: [{ name, color, data: [..] }], marker: { x, label } }
+ */
+export function createCurveChart(el) {
+  const chart = echarts.init(el, null, { renderer: 'canvas' });
+  const ro = new ResizeObserver(() => chart.resize());
+  ro.observe(el);
+  let last = null;
+
+  function build({ x, xUnit, yUnit, series, marker, yMin }) {
+    const t = themeTokens();
+    const wide = (el.clientWidth || 800) >= 640;
+    return {
+      backgroundColor: 'transparent',
+      textStyle: { fontFamily: getComputedStyle(document.body).fontFamily },
+      grid: { left: 52, right: wide ? 112 : 18, top: 26, bottom: 42 },
+      legend: { show: false },
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: { type: 'line', lineStyle: { color: t.axis } },
+        confine: true,
+        backgroundColor: t.surface,
+        borderColor: t.border,
+        textStyle: { color: t.text, fontSize: 12 },
+        extraCssText: 'box-shadow: 0 8px 24px rgba(0,0,0,.18); border-radius: 10px;',
+        formatter: (items) =>
+          `<div style="font-weight:600;color:${t.text2};margin-bottom:6px">${esc(fmtNumber(items[0].axisValue))} ${esc(xUnit)} battery</div>` +
+          items
+            .map(
+              (it) => `<div style="display:flex;align-items:center;gap:8px;line-height:1.7">
+                <span style="width:10px;height:10px;border-radius:50%;background:${it.color};display:inline-block"></span>
+                <b style="font-variant-numeric:tabular-nums">${esc(fmtNumber(it.value[1], 1))}${esc(yUnit)}</b>
+                <span style="color:${t.text2}">${esc(it.seriesName)}</span></div>`
+            )
+            .join(''),
+      },
+      xAxis: {
+        type: 'value',
+        min: 0,
+        max: x[x.length - 1],
+        name: xUnit,
+        nameLocation: 'middle',
+        nameGap: 26,
+        nameTextStyle: { color: t.text3 },
+        axisLine: { lineStyle: { color: t.axis } },
+        axisTick: { show: false },
+        axisLabel: { color: t.text3 },
+        splitLine: { show: false },
+      },
+      yAxis: {
+        type: 'value',
+        min: yMin,
+        max: 100,
+        axisLabel: { color: t.text3, formatter: (v) => `${v}${yUnit}` },
+        splitLine: { lineStyle: { color: t.grid } },
+      },
+      series: series.map((s, i) => ({
+        name: s.name,
+        type: 'line',
+        data: x.map((xv, k) => [xv, s.data[k]]),
+        color: s.color,
+        showSymbol: false,
+        symbol: 'circle',
+        symbolSize: 8,
+        lineStyle: { width: 2, cap: 'round', join: 'round' },
+        itemStyle: { borderColor: t.surface, borderWidth: 2 },
+        emphasis: { focus: 'series' },
+        endLabel: wide ? { show: true, formatter: () => s.name, color: t.text2, fontSize: 11, distance: 6, width: 100, overflow: 'truncate' } : undefined,
+        labelLayout: { hideOverlap: true },
+        markLine:
+          i === 0 && marker
+            ? {
+                silent: true,
+                symbol: 'none',
+                lineStyle: { color: t.text3, type: 'dashed', width: 1 },
+                label: { formatter: marker.label, color: t.text2, fontSize: 11, position: 'insideEndTop' },
+                data: [{ xAxis: marker.x }],
+              }
+            : undefined,
+      })),
+    };
+  }
+
+  const api = {
+    chart,
+    setData(data) {
+      last = data;
+      chart.setOption(build(data), { notMerge: true });
+    },
+    rerender() {
+      if (last) chart.setOption(build(last), { notMerge: true });
+    },
+    dispose() {
+      ro.disconnect();
+      instances.delete(api);
+      chart.dispose();
+    },
+  };
+  instances.add(api);
+  return api;
+}
+
 // Table twin for any time chart: one row per timestamp, one column per series.
 export function renderSeriesTable(container, panels, maxRows = 3000) {
   const cols = [];
