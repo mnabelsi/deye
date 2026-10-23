@@ -93,7 +93,13 @@ export async function mount(root, ctx) {
       body.innerHTML = `<div class="alert warn">${icon('warn')}<div class="grow">No solar or home-load readings were found for this station. Pick them in Overview → Customize.</div></div>`;
       return;
     }
-    const data = await api.get('/api/series', { metrics: ids, from, to, bucket: 3600 });
+    let data;
+    try {
+      data = await api.get('/api/series', { metrics: ids, from, to, bucket: 3600 });
+    } catch (err) {
+      body.innerHTML = `<div class="alert err">${icon('warn')}<div class="grow"><b>Could not read the history.</b> ${esc(err.message)}</div></div>`;
+      return;
+    }
     const byId = new Map(data.series.map((x) => [x.metric.id, x.points]));
     const series = Object.fromEntries(ROLES.map((r) => [r, flow[r].hidden ? [] : combineSeries(flow[r].parts, byId)]));
     st.hours = buildHours(series, from, to);
