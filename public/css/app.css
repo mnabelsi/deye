@@ -332,13 +332,16 @@ table.table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .flow .node-off .node-circle { stroke: var(--border-strong); stroke-dasharray: 4 4; }
 .flow .node-off g { color: var(--text-3) !important; }
 .flow .node-off .node-value { fill: var(--text-3); }
+.flow .soc-ring-bg { fill: none; stroke: var(--surface-3); stroke-width: 4; }
+.flow .soc-ring { fill: none; stroke-width: 4; stroke-linecap: round; transition: stroke-dasharray 0.6s; }
+.flow .soc-tick { stroke: var(--text); stroke-width: 2.5; stroke-linecap: round; }
 
 /* Where the power goes: one row per node with a stacked bar of its sources or destinations. */
 .flow-split { display: grid; gap: 12px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
 .split-row { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 4px 14px; align-items: center; }
 .split-title { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 650; color: var(--text-2); grid-row: span 2; }
 .split-title b { color: var(--text); font-weight: 700; margin-left: auto; white-space: nowrap; }
-.split-row:not(:has(.split-bar)) .split-title { grid-row: auto; }
+.split-row:not(:has(.split-bar, .soc-bar)) .split-title { grid-row: auto; }
 .split-bar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--surface-3); }
 .split-bar > span { display: block; height: 100%; transition: width 0.6s; }
 .split-text { display: flex; flex-wrap: wrap; gap: 2px 14px; font-size: 12.5px; color: var(--text-2); }
@@ -346,9 +349,16 @@ table.table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .split-part i { width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0; }
 .split-state { font-weight: 650; color: var(--text); }
 .split-note { margin: 0; font-size: 12px; color: var(--text-3); }
+.split-sub { grid-column: 2; align-items: center; gap: 4px 8px; color: var(--text-3); }
+/* Battery charge with a mark at the reserve; amber at or below it. */
+.soc-bar { position: relative; height: 8px; border-radius: 4px; background: var(--surface-3); }
+.soc-bar > span { display: block; height: 100%; border-radius: 4px; background: var(--battery); transition: width 0.6s; }
+.soc-bar.low > span { background: var(--warning); }
+.soc-bar > i { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; border-radius: 1px; background: var(--text); }
 @media (max-width: 420px) {
   .split-row { grid-template-columns: minmax(0, 1fr); }
   .split-title { grid-row: auto; }
+  .split-sub { grid-column: auto; }
 }
 
 /* ---------- Charts ---------- */

@@ -14,7 +14,9 @@ Built with plain **Node.js + Express** (no build step) so it deploys as-is on **
   an animated power-flow diagram, today's energy totals and a zoomable day chart (browse any past day).
   Under the diagram, a breakdown shows where solar goes (home, battery, grid), what feeds the home and the
   battery, and whether the grid and generator are on (from their voltage) and in use or not needed.
-  A **W / A** toggle shows home, grid and generator power in watts or amps (watts ÷ measured voltage).
+  A **W / A** toggle shows home, grid, generator and battery power in watts or amps (watts ÷ measured voltage).
+  The battery shows its charge with a mark at the reserve it keeps (read from the inverter's time-of-use and
+  Low Batt settings, or set in Customize), the energy pattern and work mode, and how long until the reserve or full.
   Readings are matched automatically; admins can pick the exact reading behind each node with **Customize**.
 - **Charts explorer** – pick any of the readings your inverter reports (voltages, currents, temperatures,
   per-MPPT power, BMS data, counters…), grouped and searchable by Solar / Battery / Grid / Load / Inverter / Temperature / Status.
@@ -157,7 +159,8 @@ DeyeCloud OpenAPI ──► collector (every N min + history queue) ──► My
 ```
 
 DeyeCloud endpoints used: `/account/token`, `/station/list`, `/station/device`, `/station/latest`,
-`/station/history` (frames and daily totals), `/device/latest`, `/device/measurePoints`, `/device/history`.
+`/station/history` (frames and daily totals), `/device/latest`, `/device/measurePoints`, `/device/history`,
+and, hourly, `/config/battery`, `/config/system` and `/config/tou` to read (never change) the battery settings.
 
 The app only **reads** data. It never sends control commands to your inverter.
 
