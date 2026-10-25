@@ -15,6 +15,7 @@ export const ROLES = [
   { role: 'soc', label: 'Battery SOC', kind: 'percent' },
   { role: 'gridVoltage', label: 'Grid voltage', kind: 'presence', hint: 'shows when the grid has power' },
   { role: 'generatorVoltage', label: 'Generator voltage', kind: 'presence', hint: 'shows when the generator runs' },
+  { role: 'loadVoltage', label: 'Home voltage', kind: 'voltage', hint: 'turns home power into amps' },
 ];
 
 // Display names for the two outside sources, e.g. "Kadisha" and "Eshtirak". Set in Customize.
@@ -24,6 +25,7 @@ const unitOf = (m) => String(m.unit || '').trim().toLowerCase();
 const isPower = (m) => m.kind === 'number' && ['w', 'kw'].includes(unitOf(m));
 const isPercent = (m) => m.kind === 'number' && unitOf(m) === '%';
 const isPresence = (m) => m.kind === 'number' && ['v', 'hz'].includes(unitOf(m));
+const isVoltage = (m) => m.kind === 'number' && unitOf(m) === 'v';
 const wattScale = (m) => (unitOf(m) === 'kw' ? 1000 : 1);
 const PHASE = /(l[123]|phase ?[123abc]|[_\s][abc])$/i;
 // "Gen"/"Generator" at a CamelCase word start; not "Generation" (PV) or "ChargingEnergy".
@@ -62,9 +64,10 @@ function byPattern(metrics, re, exclude) {
 const parts = (list, sign = 1) => list.map((m) => ({ metric: m, scale: wattScale(m) * sign }));
 
 // A grid/generator voltage (or else frequency) reading; any one phase is enough to tell power is present.
-function presence(metrics, re, exclude) {
-  for (const unit of ['v', 'hz']) {
-    const hits = metrics.filter((m) => isPresence(m) && unitOf(m) === unit && re.test(m.key) && !(exclude && exclude.test(m.key)) && !NOT_MEASURED.test(m.key));
+function presence(metrics, re, exclude, units = ['v', 'hz']) {
+  const excluded = (key) => [].concat(exclude || []).some((x) => x.test(key));
+  for (const unit of units) {
+    const hits = metrics.filter((m) => isPresence(m) && unitOf(m) === unit && re.test(m.key) && !excluded(m.key) && !NOT_MEASURED.test(m.key));
     if (hits.length) {
       hits.sort((a, b) => Number(PHASE.test(a.key)) - Number(PHASE.test(b.key)) || a.key.localeCompare(b.key));
       return [{ metric: hits[0], scale: 1 }];
@@ -82,13 +85,21 @@ function auto(role, station, metrics) {
   const devices = metrics.filter((m) => m.sourceType === 'device');
   switch (role) {
     case 'solar': {
-      if (sm('generationPower')) return parts([sm('generationPower')]);
-      const m = byKey(devices, ['totalsolarpower', 'totalpvpower', 'pvpower', 'solarpower', 'totaldcinputpower', 'dcinputpower'], isPower);
-      if (m) return parts([m]);
+      // The inverter's own PV readings come first: the station's generationPower is DeyeCloud's
+      // "Production", which also counts a generator on the GEN port, so at night it shows the
+      // generator's output as solar. Totals are summed over devices (stations with several inverters).
+      const total = ['totalsolarpower', 'totalpvpower', 'pvpower', 'solarpower', 'totaldcinputpower', 'dcinputpower']
+        .map((k) => devices.filter((x) => x.key.toLowerCase() === k && isPower(x)))
+        .find((list) => list.length);
+      if (total) return parts(total);
+      const strings = devices.filter((x) => isPower(x) && /pv\d|mppt\d/i.test(x.key) && !NOT_LIVE.test(x.key) && !GEN.test(x.key));
+      if (strings.length) return parts(strings);
       const pv = byPattern(devices, /(solar|pv|dc).*power|power.*(pv|solar)/i, GEN);
       if (pv) return parts(pv);
-      const strings = devices.filter((x) => isPower(x) && /pv\d|mppt\d/i.test(x.key));
-      return strings.length ? parts(strings) : null;
+      if (!sm('generationPower')) return null;
+      // Last resort: Production minus the generator.
+      const gen = auto('generator', station, metrics);
+      return [...parts([sm('generationPower')]), ...(gen || []).map((p) => ({ ...p, scale: -p.scale }))];
     }
     case 'load': {
       if (sm('consumptionPower')) return parts([sm('consumptionPower')]);
@@ -135,6 +146,8 @@ function auto(role, station, metrics) {
       return presence(devices, /grid/i, GEN);
     case 'generatorVoltage':
       return presence(devices, GEN);
+    case 'loadVoltage':
+      return presence(devices, /load|ups|backup|output|^ac.?volt/i, [/grid/i, GEN], ['v']);
     default:
       return null;
   }
@@ -226,6 +239,30 @@ export function sourceOn(presenceNode, powerW, idleW) {
   return null;
 }
 
+// Below this a voltage reading means the source is off, so it can't be used to work out amps.
+const MIN_VOLTS = 50;
+
+/** A node's reading in volts, or null when it isn't a live voltage (missing, Hz, or source off). */
+export function nodeVolts(node) {
+  if (!node || node.hidden || !node.parts.length || node.value === null) return null;
+  return unitOf(node.parts[0].metric) === 'v' && node.value >= MIN_VOLTS ? node.value : null;
+}
+
+/** 3 when the inverter reports a live third phase (L3, or R/S/T as …TWC), else 1. */
+export function phaseCount(station) {
+  return metricsOf(station).some((m) => isVoltage(m) && /(l3|twc)$/i.test(m.key) && Number(m.lastValue) >= MIN_VOLTS) ? 3 : 1;
+}
+
+/**
+ * Current in A for a power in W: watts ÷ volts on one phase; on three phases the current per phase,
+ * from a phase voltage (L-N) or, above 300 V, a line voltage (L-L).
+ */
+export function toAmps(w, volts, phases = 1) {
+  if (w === null || w === undefined || !volts) return null;
+  if (phases === 3) return volts > 300 ? w / (Math.sqrt(3) * volts) : w / (3 * volts);
+  return w / volts;
+}
+
 export function describeParts(p) {
   if (!p || !p.length) return 'not found';
   return p
@@ -258,7 +295,7 @@ export function generatorEnergyToday(station) {
 
 /** Candidate readings for the Customize dialog. */
 export function candidates(station, kind) {
-  const test = { percent: isPercent, presence: isPresence }[kind] || isPower;
+  const test = { percent: isPercent, presence: isPresence, voltage: isVoltage }[kind] || isPower;
   return metricsOf(station).filter(test);
 }
 
