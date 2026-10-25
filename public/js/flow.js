@@ -318,7 +318,9 @@ const modeLabel = (v) => (v ? LABELS[String(v).toUpperCase()] || String(v).repla
 /**
  * The battery's reserve and the inverter's mode, from its settings (read hourly) or Customize.
  * The reserve is the charge the battery keeps right now: with time of use on, the current slot's
- * SOC while the grid or generator can take over; otherwise, and during an outage, Low Batt.
+ * SOC while the grid or generator can take over; otherwise, and during an outage, Shutdown (the
+ * level where the inverter stops the battery). Low Batt is only an alarm on Deye inverters, so
+ * it is used just when Shutdown is unknown.
  * `sourceAvailable` is whether the grid or generator has power (null when unknown).
  */
 export function batteryInfo(station, { sourceAvailable = null, now = Date.now() } = {}) {
@@ -326,18 +328,20 @@ export function batteryInfo(station, { sourceAvailable = null, now = Date.now() 
   const b = cfg.battery || {};
   const sys = cfg.system || {};
   const low = num(b.battLowCapacity);
+  const shutdown = num(b.battShutDownCapacity);
   const slot = touSlot(cfg.tou, now, station.timezone);
   const manual = num(station.flowMap && station.flowMap.reserve);
   let reserve = null;
   let reserveFrom = null;
   if (manual !== null) [reserve, reserveFrom] = [manual, 'manual'];
   else if (slot && slot.soc !== null && sourceAvailable !== false) [reserve, reserveFrom] = [slot.soc, 'tou'];
+  else if (shutdown !== null) [reserve, reserveFrom] = [shutdown, 'shutdown'];
   else if (low !== null) [reserve, reserveFrom] = [low, 'low'];
   return {
     reserve,
     reserveFrom,
     low,
-    shutdown: num(b.battShutDownCapacity),
+    shutdown,
     slot,
     pattern: modeLabel(sys.energyPattern),
     workMode: modeLabel(sys.systemWorkMode),

@@ -515,3 +515,19 @@ table.table { width: 100%; border-collapse: collapse; font-size: 13px; }
 @media (max-width: 340px) {
   .grid.kpis { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* ---------- Inverter settings ---------- */
+.tou-days { display: flex; flex-wrap: wrap; gap: 6px 14px; align-self: flex-end; padding-bottom: 8px; }
+.tou-table input[type='number'] { width: 96px; text-align: right; }
+.tou-table input[type='time'] { width: 112px; }
+.tou-table td { white-space: nowrap; }
+.tou-table tr.tou-now td { background: var(--primary-soft); }
+.change-list { margin: 0; padding-left: 18px; display: grid; gap: 6px; font-size: 13px; }
+.change-list ul { margin: 4px 0 0; padding-left: 18px; color: var(--text-2); }
+.raw-src + .raw-src { margin-top: 12px; }
+.raw-json { margin: 6px 0 0; padding: 10px 12px; max-height: 260px; overflow: auto; font-size: 12px; line-height: 1.45; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.nowrap { white-space: nowrap; }
+details#raw > summary { list-style: none; }
+details#raw > summary::-webkit-details-marker { display: none; }
+details#raw > summary h2::after { content: ' ▸'; color: var(--text-3); }
+details#raw[open] > summary h2::after { content: ' ▾'; }

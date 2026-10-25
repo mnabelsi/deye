@@ -201,6 +201,59 @@ class DeyeClient {
     return this.call('/config/tou', { deviceSn });
   }
 
+  // Live read: asks the inverter itself for its current strategy (time of use, work mode, currents,
+  // power limits). DeyeCloud's /config answers are its stored copy and can lag behind.
+  strategyRead(deviceSn) {
+    return this.call('/strategy/dynamicControl/read', { deviceSn });
+  }
+
+  strategyReadResult(orderId) {
+    return this.call('/strategy/dynamicControl/readResult', { orderId: Number(orderId) });
+  }
+
+  /** Progress of a command: status 0 queued, 100 sending, 400 terminated, 500 failed, 666 succeeded. */
+  orderStatus(orderId) {
+    return this.call(`/order/${encodeURIComponent(orderId)}?language=en`, undefined, { method: 'GET' });
+  }
+
+  // ---- Commands that change the inverter's settings (sent from the Inverter page by an admin) ----
+  // Never retried automatically, so a timeout can't apply a change twice.
+  command(path, body) {
+    return this.call(path, body, { retries: 0 });
+  }
+
+  setEnergyPattern(deviceSn, energyPattern) {
+    return this.command('/order/sys/energyPattern/update', { deviceSn, energyPattern });
+  }
+
+  setWorkMode(deviceSn, workMode) {
+    return this.command('/order/sys/workMode/update', { deviceSn, workMode });
+  }
+
+  setSolarSell(deviceSn, on) {
+    return this.command('/order/sys/solarSell/control', { deviceSn, action: on ? 'on' : 'off' });
+  }
+
+  setSystemPower(deviceSn, powerType, value) {
+    return this.command('/order/sys/power/update', { deviceSn, powerType, value });
+  }
+
+  setBatteryParameter(deviceSn, paramterType, value) {
+    return this.command('/order/battery/parameter/update', { deviceSn, paramterType, value });
+  }
+
+  setBatteryMode(deviceSn, batteryModeType, on) {
+    return this.command('/order/battery/modeControl', { deviceSn, batteryModeType, action: on ? 'on' : 'off' });
+  }
+
+  setTouSwitch(deviceSn, on, days) {
+    return this.command('/order/sys/tou/switch', on && days && days.length ? { deviceSn, action: 'on', days } : { deviceSn, action: on ? 'on' : 'off' });
+  }
+
+  setTou(deviceSn, timeUseSettingItems) {
+    return this.command('/order/sys/tou/update', { deviceSn, timeUseSettingItems });
+  }
+
   deviceHistory(deviceSn, granularity, startAt, endAt, measurePoints) {
     const body = { deviceSn, granularity, startAt };
     if (endAt) body.endAt = endAt;

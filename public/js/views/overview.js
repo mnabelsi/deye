@@ -94,8 +94,9 @@ function reserveText(info, names, sourceAvailable) {
   const r = `reserve ${fmtNumber(info.reserve, 0)}%`;
   if (info.reserveFrom === 'manual') return `${r} (set in Customize)`;
   if (info.reserveFrom === 'tou') return `${r} (time of use ${info.slot.from}–${info.slot.to})`;
-  if (info.slot && sourceAvailable === false) return `${r} (Low Batt, during the outage; ${fmtNumber(info.slot.soc, 0)}% again once power is back)`;
-  return `${r} (Low Batt setting)`;
+  const setting = info.reserveFrom === 'shutdown' ? 'Shutdown' : 'Low Batt';
+  if (info.slot && sourceAvailable === false) return `${r} (${setting}, during the outage; ${fmtNumber(info.slot.soc, 0)}% again once power is back)`;
+  return `${r} (${setting} setting)`;
 }
 
 /**
@@ -106,7 +107,7 @@ function batteryStatus({ soc, battery, info, kwh, sourceOn: srcOn, sourceName, n
   if (soc === null || soc === undefined) return '';
   const b = battery || 0;
   const r = info.reserve;
-  const floor = info.low !== null ? info.low : info.shutdown;
+  const floor = info.shutdown !== null ? info.shutdown : info.low;
   if (b < -TH) {
     if (soc >= 99) return 'Topping up the last few percent';
     const eta = kwh ? `, full in about ${duration((((100 - soc) / 100) * kwh) / (-b / 1000))} at this rate` : '';
@@ -613,7 +614,7 @@ export async function mount(root, ctx) {
     const fromInverter = batteryInfo({ ...s, flowMap: { ...map, reserve: null } });
     const inverterReserve = fromInverter.reserve === null
       ? 'not readable from the inverter'
-      : `inverter now: ${fmtNumber(fromInverter.reserve, 0)}%, ${fromInverter.reserveFrom === 'tou' ? 'time of use' : 'Low Batt'}`;
+      : `inverter now: ${fmtNumber(fromInverter.reserve, 0)}%, ${{ tou: 'time of use', shutdown: 'Shutdown', low: 'Low Batt' }[fromInverter.reserveFrom]}`;
     const reserveField = `<label class="field">Battery reserve % <span class="hint">leave empty to follow the inverter's settings (${esc(inverterReserve)})</span>
         <input type="number" name="reserve" min="0" max="100" step="1" value="${map.reserve === undefined || map.reserve === null ? '' : esc(map.reserve)}"></label>`;
     const res = await modal({

@@ -117,6 +117,27 @@ module.exports = [
     KEY idx_backfill_status (status, day)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
+  // Changes to inverter settings sent from the Inverter page, in order, with their outcome.
+  // Times are epoch seconds. status: pending → sent (order_id set) → succeeded | failed.
+  `CREATE TABLE IF NOT EXISTS inverter_commands (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+    device_sn VARCHAR(64) NOT NULL,
+    field VARCHAR(32) NOT NULL,
+    old_value TEXT NULL,
+    new_value TEXT NOT NULL,
+    status VARCHAR(12) NOT NULL DEFAULT 'pending',
+    order_id BIGINT NULL,
+    message VARCHAR(512) NULL,
+    user_id INT UNSIGNED NULL,
+    username VARCHAR(64) NULL,
+    created_ts INT UNSIGNED NOT NULL,
+    sent_ts INT UNSIGNED NULL,
+    done_ts INT UNSIGNED NULL,
+    PRIMARY KEY (id),
+    KEY idx_inverter_commands_device (device_sn, id),
+    KEY idx_inverter_commands_status (status)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+
   `CREATE TABLE IF NOT EXISTS collector_runs (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     kind VARCHAR(24) NOT NULL,

@@ -40,6 +40,7 @@ function createApp() {
   app.use('/api/users', require('./routes/users'));
   app.use('/api/settings', require('./routes/settings'));
   app.use('/api/collector', require('./routes/collector'));
+  app.use('/api/inverter', require('./routes/inverter'));
   app.use('/api', require('./routes/data'));
 
   app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));

@@ -16,7 +16,7 @@ Built with plain **Node.js + Express** (no build step) so it deploys as-is on **
   battery, and whether the grid and generator are on (from their voltage) and in use or not needed.
   A **W / A** toggle shows home, grid, generator and battery power in watts or amps (watts ÷ measured voltage).
   The battery shows its charge with a mark at the reserve it keeps (read from the inverter's time-of-use and
-  Low Batt settings, or set in Customize), the energy pattern and work mode, and how long until the reserve or full.
+  Shutdown settings, or set in Customize), the energy pattern and work mode, and how long until the reserve or full.
   Readings are matched automatically; admins can pick the exact reading behind each node with **Customize**.
 - **Charts explorer** – pick any of the readings your inverter reports (voltages, currents, temperatures,
   per-MPPT power, BMS data, counters…), grouped and searchable by Solar / Battery / Grid / Load / Inverter / Temperature / Status.
@@ -35,6 +35,12 @@ Built with plain **Node.js + Express** (no build step) so it deploys as-is on **
   Overview → **Customize**; every page uses those names.
 - **Devices & readings** – every station and device (inverter, logger, meter, battery…) with all current
   values, and a log of state changes (running mode, battery status, faults…).
+- **Inverter settings** – the inverter's battery, system and time-of-use settings, read hourly both from
+  DeyeCloud's stored copy and live from the inverter (the live answer wins), with the raw answers shown for
+  checking. Admins can change them: energy pattern, work mode, solar sell and power limits, Batt Low,
+  charge/discharge and grid-charge currents, grid/generator charging, and time of use (days and the six
+  slots). Each change is confirmed first, sent one at a time, followed until the inverter confirms it, and
+  kept in a change log.
 - **Complete history** – polls DeyeCloud every few minutes, **imports past history** from DeyeCloud
   day by day, and **fills gaps automatically** if the app was asleep.
 - **Accounts** – login with default **`admin` / `123456`** (change it on first login), extra users (admin or viewer).
@@ -159,10 +165,16 @@ DeyeCloud OpenAPI ──► collector (every N min + history queue) ──► My
 ```
 
 DeyeCloud endpoints used: `/account/token`, `/station/list`, `/station/device`, `/station/latest`,
-`/station/history` (frames and daily totals), `/device/latest`, `/device/measurePoints`, `/device/history`,
-and, hourly, `/config/battery`, `/config/system` and `/config/tou` to read (never change) the battery settings.
+`/station/history` (frames and daily totals), `/device/latest`, `/device/measurePoints`, `/device/history`;
+for inverter settings, hourly, `/config/battery`, `/config/system`, `/config/tou` and the live read
+`/strategy/dynamicControl/read` (+ `/readResult`), with `/order/{id}` to follow commands.
 
-The app only **reads** data. It never sends control commands to your inverter.
+Settings are changed **only** when an admin confirms a change on the Inverter settings page, through
+`/order/sys/energyPattern/update`, `/order/sys/workMode/update`, `/order/sys/solarSell/control`,
+`/order/sys/power/update`, `/order/battery/parameter/update`, `/order/battery/modeControl`,
+`/order/sys/tou/switch` and `/order/sys/tou/update`. The collector never changes settings on its own; it only
+carries on sending changes an admin already queued. Battery type and raw Modbus commands are deliberately
+not offered.
 
 ### Database tables
 
@@ -175,6 +187,7 @@ The app only **reads** data. It never sends control commands to your inverter.
 | `daily_energy` | Daily kWh totals per station |
 | `backfill_queue` | Resumable history-import jobs |
 | `collector_runs` | Collector log (kept 30 days) |
+| `inverter_commands` | Inverter setting changes: who, old → new value, DeyeCloud order and outcome |
 | `users`, `settings` | Accounts, preferences and configuration |
 
 **Storage estimate:** a hybrid inverter reports roughly 60–150 numeric readings. At 5-minute polling that is
@@ -205,6 +218,8 @@ page). The model is plain JavaScript in `public/js/insights-model.js` and runs i
 
 ## Security notes
 
+- Only admin accounts can change inverter settings; viewers see them read-only. Every change is validated
+  on the server against safe ranges, confirmed in a dialog listing old → new values, and logged with the user.
 - Change the default `admin` / `123456` password straight away. The dashboard reminds you until you do.
 - Passwords are hashed with bcrypt. Sessions are HMAC-signed, HTTP-only, SameSite cookies, and changing
   a password signs out its old sessions. Login attempts are rate-limited.

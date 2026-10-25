@@ -510,19 +510,116 @@ api.post('/device/history', (req, res) => {
   res.json(ok({ deviceSn, deviceType: 'INVERTER', dataList }));
 });
 
-// Inverter settings (read-only): time-of-use keeps RESERVE_SOC while the grid or generator can take
-// over, and Low Batt (MIN_SOC) is how far the battery goes during an outage, as simulated above.
+// ---------- inverter settings ----------
+// Time of use keeps RESERVE_SOC while the grid or generator can take over, and Shutdown (MIN_SOC)
+// is how far the battery goes during an outage, as simulated above; Batt Low is only an alarm. Changes made through the
+// /order endpoints update `inverter` once their order succeeds (a few seconds later), while
+// DeyeCloud's stored copy (/config/*) only catches up a minute after that, like the real service.
+const touSlot = (time) => ({ time, power: GRID_CHARGE_W, soc: RESERVE_SOC, enableGridCharge: true, enableGeneration: true, enableSell: false });
+const inverter = {
+  battCapacity: Math.round((BATTERY_KWH * 1000) / 51.2),
+  battLowCapacity: MIN_SOC + 5,
+  battShutDownCapacity: MIN_SOC,
+  maxChargeCurrent: 100,
+  maxDischargeCurrent: 120,
+  gridChargeAction: 'on',
+  gridChargeAmpere: 60,
+  genChargeAction: 'on',
+  energyPattern: 'LOAD_FIRST',
+  workMode: 'ZERO_EXPORT_TO_CT',
+  solarSellAction: 'off',
+  maxSellPower: INVERTER_W,
+  maxSolarPower: INVERTER_W,
+  zeroExportPower: 20,
+  touAction: 'on',
+  touDays: ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY', 'SUNDAY'],
+  timeUseSettingItems: ['01:00', '05:00', '09:00', '13:00', '17:00', '21:00'].map(touSlot),
+};
+let stored = JSON.parse(JSON.stringify(inverter));
+const ORDER_MS = 4000;
+const orders = new Map();
+let nextOrder = 7000001;
+
+// Queues a command; `apply` runs when it succeeds.
+function order(res, apply) {
+  const id = nextOrder++;
+  orders.set(id, { at: Date.now(), apply, done: false });
+  res.json(ok({ orderId: id, connectionStatus: 1, collectionTime: Math.floor(Date.now() / 1000) }));
+}
+
+function settle(id) {
+  const o = orders.get(id);
+  if (!o || o.done || Date.now() - o.at < ORDER_MS) return o;
+  o.done = true;
+  if (o.apply) {
+    o.apply();
+    setTimeout(() => (stored = JSON.parse(JSON.stringify(inverter))), 60000).unref();
+  }
+  return o;
+}
+
+api.get('/order/:id', (req, res) => {
+  const o = settle(Number(req.params.id));
+  if (!o) return res.json(fail('2101040', 'order not found'));
+  res.json(ok({ orderId: Number(req.params.id), status: o.done ? 666 : 100, error: null }));
+});
+
 api.post('/config/battery', (req, res) => {
-  res.json(ok({ battCapacity: Math.round((BATTERY_KWH * 1000) / 51.2), battLowCapacity: MIN_SOC, battShutDownCapacity: 10, maxChargeCurrent: 100, maxDischargeCurrent: 120 }));
+  const { battCapacity, battLowCapacity, battShutDownCapacity, maxChargeCurrent, maxDischargeCurrent } = stored;
+  res.json(ok({ battCapacity, battLowCapacity, battShutDownCapacity, maxChargeCurrent, maxDischargeCurrent }));
 });
 
 api.post('/config/system', (req, res) => {
-  res.json(ok({ energyPattern: 'LOAD_FIRST', systemWorkMode: 'ZERO_EXPORT_TO_CT', maxSellPower: INVERTER_W, maxSolarPower: INVERTER_W, zeroExportPower: 20 }));
+  const { energyPattern, workMode, maxSellPower, maxSolarPower, zeroExportPower } = stored;
+  res.json(ok({ energyPattern, systemWorkMode: workMode, maxSellPower, maxSolarPower, zeroExportPower }));
 });
 
+// This stored copy leaves touAction out, to check that the live read fills it in.
 api.post('/config/tou', (req, res) => {
-  const slot = (time) => ({ time, power: GRID_CHARGE_W, soc: RESERVE_SOC, enableGridCharge: true, enableGeneration: true });
-  res.json(ok({ touAction: 'on', timeUseSettingItems: ['01:00', '05:00', '09:00', '13:00', '17:00', '21:00'].map(slot) }));
+  res.json(ok({ timeUseSettingItems: stored.timeUseSettingItems }));
+});
+
+api.post('/strategy/dynamicControl/read', (req, res) => order(res, null));
+
+api.post('/strategy/dynamicControl/readResult', (req, res) => {
+  const o = settle(Number(req.body && req.body.orderId));
+  if (!o || !o.done) return res.json(fail('2101041', 'command is still being executed'));
+  const i = inverter;
+  res.json(ok({
+    touAction: i.touAction, touDays: i.touDays, timeUseSettingItems: i.timeUseSettingItems, workMode: i.workMode,
+    gridChargeAction: i.gridChargeAction, gridChargeAmpere: i.gridChargeAmpere, maxChargeCurrent: i.maxChargeCurrent,
+    maxDischargeCurrent: i.maxDischargeCurrent, maxSellPower: i.maxSellPower, maxSolarPower: i.maxSolarPower,
+    solarSellAction: i.solarSellAction, zeroExportPower: i.zeroExportPower,
+  }));
+});
+
+const body = (req) => req.body || {};
+api.post('/order/sys/energyPattern/update', (req, res) => order(res, () => (inverter.energyPattern = body(req).energyPattern)));
+api.post('/order/sys/workMode/update', (req, res) => order(res, () => (inverter.workMode = body(req).workMode)));
+api.post('/order/sys/solarSell/control', (req, res) => order(res, () => (inverter.solarSellAction = body(req).action)));
+api.post('/order/sys/power/update', (req, res) => {
+  const key = { MAX_SELL_POWER: 'maxSellPower', MAX_SOLAR_POWER: 'maxSolarPower', ZERO_EXPORT_POWER: 'zeroExportPower' }[body(req).powerType];
+  if (!key) return res.json(fail('1000002', 'invalid param'));
+  order(res, () => (inverter[key] = body(req).value));
+});
+api.post('/order/battery/parameter/update', (req, res) => {
+  const key = { MAX_CHARGE_CURRENT: 'maxChargeCurrent', MAX_DISCHARGE_CURRENT: 'maxDischargeCurrent', GRID_CHARGE_AMPERE: 'gridChargeAmpere', BATT_LOW: 'battLowCapacity' }[body(req).paramterType];
+  if (!key) return res.json(fail('1000002', 'invalid param'));
+  order(res, () => (inverter[key] = body(req).value));
+});
+api.post('/order/battery/modeControl', (req, res) => {
+  const key = { GRID_CHARGE: 'gridChargeAction', GEN_CHARGE: 'genChargeAction' }[body(req).batteryModeType];
+  if (!key) return res.json(fail('1000002', 'invalid param'));
+  order(res, () => (inverter[key] = body(req).action));
+});
+api.post('/order/sys/tou/switch', (req, res) => order(res, () => {
+  inverter.touAction = body(req).action;
+  if (body(req).action === 'on') inverter.touDays = body(req).days || inverter.touDays;
+}));
+api.post('/order/sys/tou/update', (req, res) => {
+  const items = body(req).timeUseSettingItems;
+  if (!Array.isArray(items) || items.length !== 6) return res.json(fail('1000002', 'timeUseSettingItems must have 6 items'));
+  order(res, () => (inverter.timeUseSettingItems = items));
 });
 
 app.use('/v1.0', api);

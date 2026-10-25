@@ -249,9 +249,11 @@ router.get('/live', async (req, res) => {
       .filter((d) => String(d.station_id) === id)
       .map((d) => {
         const dm = metrics.filter((m) => m.source_type === 'device' && m.source_id === d.sn);
+        // The merged inverter settings; raw answers stay on the Inverter page.
         let config = null;
         try {
-          config = JSON.parse(all[`device_config:${d.sn}`] || 'null');
+          const c = JSON.parse(all[`device_config:${d.sn}`] || 'null');
+          config = c && { at: c.at, battery: c.battery, system: c.system, tou: c.tou };
         } catch {
           config = null;
         }
