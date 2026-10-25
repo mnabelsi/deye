@@ -87,7 +87,7 @@ export async function mount(root, ctx) {
 
   // Default selection: the station's main power readings.
   if (!st.selected.length && !p.get('m')) {
-    const defaults = ['generationPower', 'consumptionPower', 'gridPower', 'batteryPower'];
+    const defaults = ['generationPower', 'consumptionPower', 'wirePower', 'batteryPower'];
     const station = sources.stations[0];
     if (station) {
       for (const key of defaults) {
