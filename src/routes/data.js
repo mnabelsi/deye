@@ -279,7 +279,7 @@ router.get('/live', async (req, res) => {
 
 // Which reading feeds each power-flow node, and the display names of the grid and generator
 // (e.g. "Kadisha", "Eshtirak"). Missing roles fall back to auto-detection in the UI.
-const FLOW_ROLES = ['solar', 'load', 'grid', 'generator', 'battery', 'soc', 'gridVoltage', 'generatorVoltage'];
+const FLOW_ROLES = ['solar', 'load', 'grid', 'generator', 'battery', 'soc', 'gridVoltage', 'generatorVoltage', 'loadVoltage'];
 const NAMED_SOURCES = ['grid', 'generator'];
 router.put('/flowmap/:stationId', auth.requireAdmin, async (req, res) => {
   const stationId = String(req.params.stationId);

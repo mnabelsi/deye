@@ -377,13 +377,14 @@ api.post('/station/device', (req, res) => {
   );
 });
 
-// Station power fields as DeyeCloud reports them: wirePower is the net grid power (+ buying /
-// − exporting), purchasePower and gridPower are its buying and exporting sides, batteryPower is
-// + discharging / − charging, and a field that is zero is left blank (null).
+// Station power fields as DeyeCloud reports them: generationPower is "Production", which counts the
+// generator on the GEN port as well as PV; wirePower is the net grid power (+ buying / − exporting),
+// purchasePower and gridPower are its buying and exporting sides, batteryPower is + discharging /
+// − charging, and a field that is zero is left blank (null).
 function stationPower(s) {
   const blank = (w) => (Math.abs(w) < 0.5 ? null : Math.round(w));
   return {
-    generationPower: blank(s.pv),
+    generationPower: blank(s.pv + s.gen),
     consumptionPower: blank(s.load),
     wirePower: blank(s.grid),
     purchasePower: blank(Math.max(0, s.grid)),
