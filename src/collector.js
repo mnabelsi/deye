@@ -5,6 +5,7 @@ const settings = require('./settings');
 const { DeyeClient } = require('./deye/client');
 const { storeSamples, upsertDailyEnergy, toEpochSeconds } = require('./store');
 const { STATION_UNITS } = require('./metrics-catalog');
+const inverter = require('./inverter');
 
 const LOCK = 'deye_monitor_collector';
 const META_KEYS = new Set(['code', 'msg', 'success', 'requestId', 'lastUpdateTime', 'collectionTime', 'stationId', 'id', 'timeStamp']);
@@ -252,38 +253,6 @@ async function collectDevicesLatest(client, devices) {
   return { added, errors };
 }
 
-// ---------- inverter settings ----------
-
-const CONFIG_CALLS = [
-  ['battery', 'configBattery'], // battLowCapacity, battShutDownCapacity, battCapacity (Ah), max currents
-  ['system', 'configSystem'], // energyPattern (BATTERY_FIRST / LOAD_FIRST), systemWorkMode
-  ['tou', 'configTou'], // touAction and the six time-of-use slots with their minimum SOC
-];
-
-/**
- * Reads (never writes) each inverter's battery, work-mode and time-of-use settings for the
- * overview's battery reserve and status, stored as settings `device_config:<sn>`.
- * Returns the error messages of calls that failed.
- */
-async function collectConfigs(client) {
-  const devices = (await db.query('SELECT sn, device_type FROM devices WHERE enabled = 1')).filter(hasHistory);
-  const failed = [];
-  for (const d of devices) {
-    const out = { at: Math.floor(Date.now() / 1000) };
-    for (const [name, call] of CONFIG_CALLS) {
-      try {
-        const res = await client[call](d.sn);
-        out[name] = Object.fromEntries(Object.entries(res).filter(([k]) => !['code', 'msg', 'success', 'requestId'].includes(k)));
-      } catch (err) {
-        out[`${name}Error`] = err.message;
-        failed.push(`${d.sn}: ${err.message}`);
-      }
-    }
-    await settings.set({ [`device_config:${d.sn}`]: JSON.stringify(out) });
-  }
-  return failed;
-}
-
 // ---------- daily energy ----------
 
 function dailyItemDay(it) {
@@ -507,12 +476,16 @@ async function runTick({ trigger, force, forceDiscover, backfill }) {
         const d = await discover(client);
         summary.messages.push(`Discovered ${d.stations} station(s), ${d.devices} device(s)`);
       }
+      // Inverter settings: read hourly; failures are reported but don't fail the run.
       if (forceDiscover || now - (parseInt(s.last_config_ts, 10) || 0) >= stationRefresh) {
-        // Not counted as a failed run: the overview falls back to a reserve set in Customize.
-        const failed = await collectConfigs(client);
+        const failed = await inverter.readAll(client);
         await settings.set({ last_config_ts: now });
-        if (failed.length) summary.messages.push(`Inverter settings not readable: ${failed[0]}`);
+        if (failed.length) summary.messages.push(`Inverter settings: ${failed.slice(0, 3).join(' · ')}`);
+      } else {
+        await inverter.finishPendingReads(client).catch((err) => summary.messages.push(`Inverter settings: ${err.message}`));
       }
+      // Changes queued on the Inverter page carry on here if nobody keeps the page open.
+      await inverter.processCommands(client, 8000).catch((err) => summary.messages.push(`Inverter changes: ${err.message}`));
 
       const stations = await db.query('SELECT * FROM stations WHERE enabled = 1');
       for (const st of stations) {

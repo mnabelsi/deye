@@ -7,6 +7,7 @@ import * as explorer from './views/explorer.js';
 import * as energy from './views/energy.js';
 import * as insights from './views/insights.js';
 import * as devices from './views/devices.js';
+import * as inverterView from './views/inverter.js';
 import * as settingsView from './views/settings.js';
 
 const ROUTES = {
@@ -15,6 +16,7 @@ const ROUTES = {
   energy: { view: energy, title: 'Energy', icon: 'energy' },
   insights: { view: insights, title: 'Battery insights', icon: 'insight' },
   devices: { view: devices, title: 'Devices & Readings', icon: 'device' },
+  inverter: { view: inverterView, title: 'Inverter settings', icon: 'sliders' },
   settings: { view: settingsView, title: 'Settings', icon: 'settings' },
 };
 
