@@ -8,7 +8,7 @@ import { DEFAULT_NAMES, resolveFlow, sourceNames } from '../flow.js';
 function seriesFor(names, hasGenerator) {
   const gridName = names.grid === DEFAULT_NAMES.grid ? 'Grid import' : names.grid;
   return [
-    { key: 'generationValue', label: 'Solar', color: '--solar' },
+    { key: 'solarValue', label: 'Solar', color: '--solar' },
     ...(hasGenerator ? [{ key: 'generatorValue', label: names.generator, color: '--generator' }] : []),
     { key: 'consumptionValue', label: 'Consumption', color: '--load' },
     { key: 'purchaseValue', label: gridName, color: '--grid' },
@@ -113,13 +113,13 @@ export async function mount(root, ctx) {
     const sum = (k) => rows.reduce((n, r) => n + (Number(r[k]) || 0), 0);
     const t = Object.fromEntries(SERIES.map((s) => [s.key, sum(s.key)]));
     const bought = t.purchaseValue + (t.generatorValue || 0);
-    const supply = t.generationValue + bought;
+    const supply = t.solarValue + bought;
     const share = (v) => (supply > 0 ? `${fmtNumber((v / supply) * 100, 0)}% of supply` : '');
     const { names } = src;
     const gridName = names.grid === DEFAULT_NAMES.grid ? 'Grid import' : names.grid;
     const boughtFrom = src.gen ? `${names.grid} or ${names.generator}` : names.grid;
     const selfSufficiency = t.consumptionValue > 0 ? Math.max(0, Math.min(100, (1 - bought / t.consumptionValue) * 100)) : null;
-    const selfConsumption = t.generationValue > 0 ? Math.max(0, Math.min(100, (1 - t.gridValue / t.generationValue) * 100)) : null;
+    const selfConsumption = t.solarValue > 0 ? Math.max(0, Math.min(100, (1 - t.gridValue / t.solarValue) * 100)) : null;
     const tile = (label, kwh, color, ic, sub) => {
       const e = fmtEnergy(kwh);
       return `<div class="card kpi" style="--c:var(${color})"><div class="kpi-top"><div class="kpi-icon">${icon(ic)}</div><div class="kpi-label">${esc(label)}</div></div>
@@ -132,16 +132,19 @@ export async function mount(root, ctx) {
     const exported = t.gridValue > 0.05;
     $('#totals', root).innerHTML = [
       tile('Consumed', t.consumptionValue, '--load', 'home', `${rows.length} ${st.group === 'day' ? 'days' : st.group === 'month' ? 'months' : 'years'}`),
-      tile('Solar', t.generationValue, '--solar', 'sun', share(t.generationValue)),
+      tile('Solar', t.solarValue, '--solar', 'sun', share(t.solarValue)),
       tile(gridName, t.purchaseValue, '--grid', 'grid', share(t.purchaseValue)),
       ...(src.gen ? [tile(names.generator, t.generatorValue, '--generator', 'plug', share(t.generatorValue))] : []),
       ...(exported ? [tile(`${names.grid} export`, t.gridValue, '--export', 'grid')] : []),
       pct('Self-sufficiency', selfSufficiency, '--battery', 'battery', `Share of consumption not bought from ${boughtFrom}`),
       ...(exported ? [pct('Self-consumption', selfConsumption, '--solar', 'bolt', 'Share of solar used on site')] : []),
     ].join('');
-    $('#footnote', root).textContent = `Solar, consumption and ${names.grid === DEFAULT_NAMES.grid ? 'grid import' : names.grid} come from DeyeCloud's daily statistics${
-      src.gen ? `; ${names.generator} is worked out from its stored power readings (—: none stored for that period)` : ''
-    }. Import older history from Settings → Import history.`;
+    const grid = names.grid === DEFAULT_NAMES.grid ? 'grid import' : names.grid;
+    $('#footnote', root).textContent = `Consumption and ${grid} come from DeyeCloud's daily statistics. ${
+      src.gen
+        ? `Solar is DeyeCloud's daily production minus ${names.generator}, because DeyeCloud counts the generator as production; ${names.generator} is worked out from its stored power readings (—: none stored for that period). `
+        : ''
+    }Consumed is measured by the inverter: it is roughly ${src.gen ? `solar + ${grid} + ${names.generator}` : `solar + ${grid}`}, plus what the battery gave, minus what it stored and inverter losses. Import older history from Settings → Import history.`;
 
     const visible = SERIES.filter((s) => !st.hidden.has(s.key));
     chart.setData({
