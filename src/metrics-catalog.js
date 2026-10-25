@@ -16,7 +16,7 @@ const STATION_LABELS = {
   batteryPower: 'Battery Power',
   batterySOC: 'Battery SOC',
   irradiateIntensity: 'Irradiance',
-  generationValue: 'Generation (day)',
+  generationValue: 'Production (day, PV + generator)',
   consumptionValue: 'Consumption (day)',
   gridValue: 'Feed-in (day)',
   purchaseValue: 'Purchase (day)',

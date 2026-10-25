@@ -439,7 +439,7 @@ api.post('/station/history', (req, res) => {
         year: y,
         month: m,
         day,
-        generationValue: t.gen,
+        generationValue: Math.round((t.gen + t.generator) * 10) / 10, // "Production": PV + generator, as DeyeCloud reports it
         consumptionValue: t.load,
         gridValue: t.sell,
         purchaseValue: t.buy,

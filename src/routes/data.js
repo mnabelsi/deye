@@ -389,9 +389,17 @@ router.get('/energy', async (req, res) => {
     }
     keys.add('generatorValue');
   }
+  // DeyeCloud's generationValue is "Production", which counts a generator on the GEN port as well
+  // as PV, so solar is production minus the generator wherever the generator's energy is known.
+  for (const row of periods.values()) {
+    if (row.generationValue === undefined || row.generationValue === null) continue;
+    row.solarValue = Math.round(Math.max(0, row.generationValue - (row.generatorValue || 0)) * 100) / 100;
+    keys.add('solarValue');
+  }
+  const LABELS = { generatorValue: 'Generator (day)', solarValue: 'Solar (day)' };
   res.json({
     group,
-    keys: [...keys].map((k) => ({ key: k, label: k === 'generatorValue' ? 'Generator (day)' : catalog.label(k, null, 'station') })),
+    keys: [...keys].map((k) => ({ key: k, label: LABELS[k] || catalog.label(k, null, 'station') })),
     rows: [...periods.values()].sort((a, b) => (a.period < b.period ? -1 : a.period > b.period ? 1 : 0)),
   });
 });

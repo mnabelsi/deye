@@ -239,7 +239,7 @@ export async function mount(root, ctx) {
   } catch {}
   if (!live.stations.some((s) => s.id === stationId)) stationId = live.stations[0].id;
 
-  const st = { day: startOfDay(), hidden: new Set(), mode: 'chart', panels: [], flow: null, unit: 'W' };
+  const st = { day: startOfDay(), hidden: new Set(), mode: 'chart', panels: [], flow: null, unit: 'W', energyRow: null };
   try {
     if (localStorage.getItem('deye-power-unit') === 'A') st.unit = 'A';
   } catch {}
@@ -248,11 +248,12 @@ export async function mount(root, ctx) {
     ctx.actions.innerHTML = `<select id="station-select" class="inline-input">${live.stations.map((s) => `<option value="${esc(s.id)}">${esc(s.name)}</option>`).join('')}</select>`;
     const sel = $('#station-select');
     sel.value = stationId;
-    sel.onchange = () => {
+    sel.onchange = async () => {
       stationId = sel.value;
       try {
         localStorage.setItem('deye-station', stationId);
       } catch {}
+      await loadEnergyRow();
       renderLive();
       loadChart();
     };
@@ -300,6 +301,30 @@ export async function mount(root, ctx) {
     return live.stations.find((s) => s.id === stationId);
   }
 
+  // The latest day's totals as the Energy page computes them (solar = DeyeCloud's production minus
+  // the generator), so both pages show the same figures. Without it DeyeCloud's raw totals are used.
+  async function loadEnergyRow() {
+    const s = station();
+    let row = null;
+    if (s.energyDay) {
+      const gen = resolveFlow(s).generator;
+      try {
+        const res = await api.get('/api/energy', {
+          stationId: s.id,
+          from: s.energyDay,
+          to: s.energyDay,
+          group: 'day',
+          gen: gen.hidden ? '' : gen.parts.map((p) => `${p.metric.id}:${p.scale}`).join(','),
+          tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        });
+        row = res.rows.find((r) => r.period === s.energyDay) || null;
+      } catch {
+        /* keep DeyeCloud's figures */
+      }
+    }
+    st.energyRow = row && { ...row, stationId: s.id, day: s.energyDay };
+  }
+
   function renderLive() {
     const s = station();
     const f = resolveFlow(s);
@@ -315,6 +340,9 @@ export async function mount(root, ctx) {
     const names = sourceNames(s);
     const namedGrid = names.grid !== DEFAULT_NAMES.grid;
     const e = s.energy;
+    const row = st.energyRow && st.energyRow.stationId === s.id && st.energyRow.day === s.energyDay ? st.energyRow : null;
+    const solarToday = row && row.solarValue !== undefined ? row.solarValue : e.generationValue;
+    const genOnEnergyDay = row && row.generatorValue !== undefined ? row.generatorValue : genToday;
     const cap = s.installedCapacity ? Number(s.installedCapacity) * 1000 : null;
     const ageMin = s.lastTs ? (Date.now() / 1000 - s.lastTs) / 60 : null;
     const kwh = (v) => {
@@ -371,7 +399,7 @@ export async function mount(root, ctx) {
         sub: `${battery === null ? '' : battery < -TH ? 'Charging' : battery > TH ? 'Discharging' : 'Idle'}${soc !== null ? ` · ${fmtNumber(soc, 0)}% charged` : ''}`,
         pct: soc,
       }),
-      kpi({ label: 'Generated today', power: fmtEnergy(e.generationValue), color: '--solar', ic: 'bolt', sub: !s.energyDay ? 'Waiting for daily statistics' : s.energyDay === localDateStr(new Date()) ? 'Daily statistics' : `For ${esc(s.energyDay)}` })
+      kpi({ label: 'Solar today', power: fmtEnergy(solarToday), color: '--solar', ic: 'bolt', sub: !s.energyDay ? 'Waiting for daily statistics' : s.energyDay === localDateStr(new Date()) ? 'Daily statistics' : `For ${esc(s.energyDay)}` })
     );
     $('#kpis', root).innerHTML = tiles.join('');
 
@@ -387,11 +415,11 @@ export async function mount(root, ctx) {
     };
     $('#today-title', root).textContent = s.energyDay && s.energyDay !== localDateStr(new Date()) ? `Energy · ${s.energyDay}` : 'Energy today';
     $('#today', root).innerHTML = [
-      mini('Generated', e.generationValue, '--solar'),
+      mini('Solar', solarToday, '--solar'),
       mini('Consumed', e.consumptionValue, '--load'),
       mini(namedGrid ? names.grid : 'Grid import', e.purchaseValue, '--grid'),
       mini(`${names.grid} export`, e.gridValue, '--export'),
-      ...(genToday !== null ? [mini(names.generator, genToday, '--generator')] : []),
+      ...(genOnEnergyDay !== null ? [mini(names.generator, genOnEnergyDay, '--generator')] : []),
       mini('Battery charged', e.chargeValue, '--battery'),
       mini('Battery discharged', e.dischargeValue, '--discharge'),
     ].join('');
@@ -492,6 +520,7 @@ export async function mount(root, ctx) {
     try {
       await api.put(`/api/flowmap/${encodeURIComponent(s.id)}`, { map: out, names: { grid: res.name_grid, generator: res.name_generator } });
       live = await api.get('/api/live');
+      await loadEnergyRow();
       renderLive();
       await loadChart();
       toast('Power flow updated', 'ok');
@@ -554,6 +583,7 @@ export async function mount(root, ctx) {
     loadChart();
   };
 
+  await loadEnergyRow();
   renderLive();
   await loadChart();
 
@@ -561,6 +591,7 @@ export async function mount(root, ctx) {
   const timer = setInterval(async () => {
     try {
       live = await api.get('/api/live');
+      await loadEnergyRow();
       renderLive();
       if (localDateStr(st.day) === localDateStr(new Date())) loadChart();
     } catch {
