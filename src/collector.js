@@ -10,6 +10,7 @@ const LOCK = 'deye_monitor_collector';
 const META_KEYS = new Set(['code', 'msg', 'success', 'requestId', 'lastUpdateTime', 'collectionTime', 'stationId', 'id', 'timeStamp']);
 const DAILY_META = new Set(['year', 'month', 'day', 'timeStamp', 'date', 'stationId']);
 const TICK_BUDGET_MS = 25000;
+const STATION_POWER_KEYS = Object.keys(STATION_UNITS).filter((k) => STATION_UNITS[k] === 'W');
 const DAILY_MAX_DAYS = 30;
 const HISTORY_POINTS_PER_REQUEST = 5;
 // Device types /device/history supports; loggers (COLLECTOR), meters etc. have no history.
@@ -180,15 +181,26 @@ async function discover(client) {
 
 // ---------- latest data ----------
 
+// DeyeCloud leaves a station power field blank when it is zero (e.g. purchasePower while not
+// buying). Skipping blanks would leave the last non-zero value showing, so while the frame has any
+// power value its blank power fields are stored as 0.
+function stationSamples(item, ts) {
+  const samples = [];
+  for (const [key, value] of Object.entries(item)) {
+    if (META_KEYS.has(key) || DAILY_META.has(key) || value === null || typeof value === 'object') continue;
+    samples.push({ ts, key, value, unit: STATION_UNITS[key] });
+  }
+  const blank = (v) => v === null || v === '';
+  if (STATION_POWER_KEYS.some((k) => k in item && !blank(item[k]))) {
+    for (const key of STATION_POWER_KEYS) if (key in item && blank(item[key])) samples.push({ ts, key, value: 0, unit: 'W' });
+  }
+  return samples;
+}
+
 async function collectStationLatest(client, station) {
   const res = await client.stationLatest(station.id);
   const ts = toEpochSeconds(pickField(res, ['lastUpdateTime', 'collectionTime', 'timeStamp'])) || Math.floor(Date.now() / 1000);
-  const samples = [];
-  for (const [key, value] of Object.entries(res)) {
-    if (META_KEYS.has(key) || value === null || typeof value === 'object') continue;
-    samples.push({ ts, key, value, unit: STATION_UNITS[key] });
-  }
-  const added = await storeSamples('station', station.id, samples);
+  const added = await storeSamples('station', station.id, stationSamples(res, ts));
   await db.query('UPDATE stations SET last_ts = GREATEST(COALESCE(last_ts, 0), ?) WHERE id = ?', [ts, station.id]);
   return added;
 }
@@ -322,11 +334,7 @@ async function backfillStationDay(client, station, day) {
   const samples = [];
   for (const it of firstArray(res, ['stationDataItems', 'dataList', 'list'])) {
     const ts = toEpochSeconds(pickField(it, ['timeStamp', 'time', 'collectionTime']));
-    if (!ts) continue;
-    for (const [key, value] of Object.entries(it)) {
-      if (META_KEYS.has(key) || DAILY_META.has(key) || typeof value === 'object') continue;
-      samples.push({ ts, key, value, unit: STATION_UNITS[key] });
-    }
+    if (ts) samples.push(...stationSamples(it, ts));
   }
   return storeSamples('station', station.id, samples);
 }

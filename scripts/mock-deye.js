@@ -377,22 +377,32 @@ api.post('/station/device', (req, res) => {
   );
 });
 
+// Station power fields as DeyeCloud reports them: wirePower is the net grid power (+ buying /
+// − exporting), purchasePower and gridPower are its buying and exporting sides, batteryPower is
+// + discharging / − charging, and a field that is zero is left blank (null).
+function stationPower(s) {
+  const blank = (w) => (Math.abs(w) < 0.5 ? null : Math.round(w));
+  return {
+    generationPower: blank(s.pv),
+    consumptionPower: blank(s.load),
+    wirePower: blank(s.grid),
+    purchasePower: blank(Math.max(0, s.grid)),
+    gridPower: blank(Math.max(0, -s.grid)),
+    chargePower: blank(Math.max(0, -s.battery)),
+    dischargePower: blank(Math.max(0, s.battery)),
+    batteryPower: blank(s.battery),
+    batterySOC: s.soc,
+    irradiateIntensity: null,
+  };
+}
+
 api.post('/station/latest', (req, res) => {
   const now = Math.floor(Date.now() / 1000);
   const ts = now - (now % 300);
   const s = simulate(ts);
   res.json(
     ok({
-      generationPower: s.pv,
-      consumptionPower: s.load,
-      gridPower: s.grid,
-      purchasePower: Math.max(0, s.grid),
-      wirePower: Math.max(0, -s.grid),
-      chargePower: Math.max(0, -s.battery),
-      dischargePower: Math.max(0, s.battery),
-      batteryPower: s.battery,
-      batterySOC: s.soc,
-      irradiateIntensity: null,
+      ...stationPower(s),
       lastUpdateTime: ts,
     })
   );
@@ -409,16 +419,7 @@ api.post('/station/history', (req, res) => {
     for (let ts = start; ts < Math.min(start + 86400, now); ts += 300) {
       const s = simulate(ts);
       items.push({
-        generationPower: s.pv,
-        consumptionPower: s.load,
-        gridPower: s.grid,
-        purchasePower: Math.max(0, s.grid),
-        wirePower: Math.max(0, -s.grid),
-        chargePower: Math.max(0, -s.battery),
-        dischargePower: Math.max(0, s.battery),
-        batteryPower: s.battery,
-        batterySOC: s.soc,
-        irradiateIntensity: null,
+        ...stationPower(s),
         timeStamp: ts,
       });
     }

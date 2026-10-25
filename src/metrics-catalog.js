@@ -3,12 +3,14 @@
 // Deye exposes hundreds of measure points whose names vary by inverter model, so
 // categories are derived from key/unit patterns instead of a fixed list.
 
+// Grid fields as checked against DeyeCloud's own history export: wirePower is the net grid power
+// (+ buying / − exporting), purchasePower and gridPower are its buying and exporting sides.
 const STATION_LABELS = {
   generationPower: 'PV Generation Power',
   consumptionPower: 'Consumption Power',
-  gridPower: 'Grid Power',
+  gridPower: 'Grid Feed-in Power',
   purchasePower: 'Grid Purchase Power',
-  wirePower: 'Grid Feed-in Power',
+  wirePower: 'Grid Power (net)',
   chargePower: 'Battery Charge Power',
   dischargePower: 'Battery Discharge Power',
   batteryPower: 'Battery Power',

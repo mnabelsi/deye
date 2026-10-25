@@ -98,10 +98,12 @@ function auto(role, station, metrics) {
       return p ? parts(p) : null;
     }
     case 'grid': {
+      // wirePower is the net grid power (+ buying / − exporting); purchasePower and gridPower
+      // are its buying and exporting sides (checked against DeyeCloud's own history export).
+      if (sm('wirePower')) return parts([sm('wirePower')]);
       const buy = sm('purchasePower');
-      const sell = sm('wirePower');
+      const sell = sm('gridPower');
       if (buy || sell) return [...(buy ? parts([buy]) : []), ...(sell ? parts([sell], -1) : [])];
-      if (sm('gridPower')) return parts([sm('gridPower')]);
       const m = byKey(devices, ['totalgridpower', 'gridpower', 'gridtotalpower', 'totalexternalctpower', 'externalctpower'], isPower);
       if (m) return parts([m]);
       const p = byPattern(devices, /grid|externalct/i, GEN);
@@ -114,10 +116,11 @@ function auto(role, station, metrics) {
       return p ? parts(p) : null;
     }
     case 'battery': {
+      // batteryPower is signed (+ discharging / − charging); charge/dischargePower are its sides.
+      if (sm('batteryPower')) return parts([sm('batteryPower')]);
       const ch = sm('chargePower');
       const dis = sm('dischargePower');
       if (ch || dis) return [...(dis ? parts([dis]) : []), ...(ch ? parts([ch], -1) : [])];
-      if (sm('batteryPower')) return parts([sm('batteryPower')]);
       const m = byKey(devices, ['batterypower', 'totalbatterypower', 'batterytotalpower'], isPower);
       if (m) return parts([m]);
       const p = byPattern(devices, /batt/i, /bms|limit/i);
@@ -175,6 +178,52 @@ function valueOf(p) {
     any = true;
   }
   return any ? sum : null;
+}
+
+/**
+ * Who feeds whom right now, in W, following the inverter's own priority: solar serves the home
+ * first, then the battery, then the grid; what solar leaves uncovered comes from the battery, then
+ * the generator, then the grid, which also make up any battery charging solar doesn't. Small
+ * mismatches (inverter losses, readings a few seconds apart) are left unassigned.
+ * Inputs: grid + import / − export, battery + discharge / − charge.
+ */
+export function splitFlows({ solar, load, grid, generator, battery }) {
+  const pos = (v) => Math.max(0, Number(v) || 0);
+  const supply = { solar: pos(solar), battery: pos(battery), generator: pos(generator), grid: pos(grid) };
+  const demand = { home: pos(load), battery: pos(-battery), grid: pos(-grid) };
+  const out = {};
+  const route = (from, to) => {
+    const w = Math.min(supply[from], demand[to]);
+    supply[from] -= w;
+    demand[to] -= w;
+    out[`${from}To${to[0].toUpperCase()}${to.slice(1)}`] = w;
+  };
+  route('solar', 'home');
+  route('solar', 'battery');
+  route('solar', 'grid');
+  route('battery', 'home');
+  route('generator', 'home');
+  route('grid', 'home');
+  route('generator', 'battery');
+  route('grid', 'battery');
+  route('battery', 'grid');
+  return out;
+}
+
+// A grid/generator voltage at or above this, or frequency at or above ON_HERTZ, means it has power.
+const ON_VOLTS = 50;
+const ON_HERTZ = 40;
+
+/**
+ * Whether an outside source (grid or generator) has power: true while power flows through it,
+ * otherwise from its voltage or frequency node, else null (can't tell).
+ */
+export function sourceOn(presenceNode, powerW, idleW) {
+  if (Math.abs(Number(powerW) || 0) > idleW) return true;
+  if (presenceNode && !presenceNode.hidden && presenceNode.parts.length && presenceNode.value !== null) {
+    return presenceNode.value >= (unitOf(presenceNode.parts[0].metric) === 'hz' ? ON_HERTZ : ON_VOLTS);
+  }
+  return null;
 }
 
 export function describeParts(p) {

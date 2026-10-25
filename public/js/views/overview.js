@@ -1,9 +1,96 @@
 import { api } from '../api.js';
 import { $, $$, esc, icon, cssVar, fmtPower, fmtEnergy, fmtNumber, fmtAgo, fmtTime, fmtValue, startOfDay, localDateStr, modal, toast } from '../util.js';
 import { createTimeChart, renderSeriesTable } from '../charts.js';
-import { ROLES, DEFAULT_NAMES, resolveFlow, describeParts, combineSeries, generatorEnergyToday, candidates, sourceNames } from '../flow.js';
+import { ROLES, DEFAULT_NAMES, resolveFlow, describeParts, combineSeries, generatorEnergyToday, candidates, sourceNames, splitFlows, sourceOn } from '../flow.js';
 
 const TH = 15; // watts below which a flow counts as idle
+// Zero-export inverters keep the grid hovering a few tens of watts from 0 even when it isn't needed.
+const SOURCE_IDLE = 50;
+
+const watts = (w) => {
+  const p = fmtPower(w);
+  return `${p.value} ${p.unit}`.trim();
+};
+
+// Why an available grid/generator isn't needed right now.
+function coverReason(split, load) {
+  if ((load || 0) <= TH) return 'the home is using almost nothing';
+  const near = (w) => w >= load - SOURCE_IDLE;
+  if (near(split.solarToHome)) return 'solar covers the home';
+  if (near(split.batteryToHome)) return 'the battery covers the home';
+  if (near(split.solarToHome + split.batteryToHome)) return 'solar and the battery cover the home';
+  return '';
+}
+
+/**
+ * What an outside source is doing: off, on but not needed (and why), supplying or exporting.
+ * Returns { on, short, text } where short fits a KPI tile.
+ */
+function sourceStatus({ on, power, toHome, toBattery, isGrid, split, load }) {
+  const p = power || 0;
+  if (on === false) return { on, short: 'Off', text: isGrid ? 'No grid power right now' : 'Not running' };
+  if (p > SOURCE_IDLE) {
+    const where = [toHome > TH ? `${watts(toHome)} to the home` : '', toBattery > TH ? `${watts(toBattery)} charging the battery` : ''].filter(Boolean).join(' · ');
+    return { on: true, short: 'In use', text: `In use, supplying ${watts(p)}${where ? `: ${where}` : ''}` };
+  }
+  if (isGrid && p < -SOURCE_IDLE) {
+    const from = [split.solarToGrid > TH ? `${watts(split.solarToGrid)} of extra solar` : '', split.batteryToGrid > TH ? `${watts(split.batteryToGrid)} from the battery` : ''].filter(Boolean).join(' · ');
+    return { on: true, short: 'Exporting', text: `Exporting ${watts(-p)}${from ? `: ${from}` : ''}` };
+  }
+  const why = coverReason(split, load);
+  if (on) return { on, short: 'Not used', text: `On but not used${why ? `, ${why}` : ''}` };
+  return { on: null, short: 'Not used', text: `Not used${why ? `, ${why}` : ''} (no voltage reading to tell whether it is on)` };
+}
+
+// One row of the breakdown: a stacked bar and "x to A · y to B" for the parts above TH.
+function splitRow(title, total, items, empty, state = '') {
+  const shown = items.filter((x) => x.w > TH);
+  const sum = shown.reduce((a, x) => a + x.w, 0);
+  const bar = sum > 0
+    ? `<div class="split-bar">${shown.map((x) => `<span style="width:${((x.w / sum) * 100).toFixed(1)}%;background:var(${x.color})"></span>`).join('')}</div>`
+    : '<div class="split-bar"></div>';
+  const text = (state ? `<span class="split-state">${esc(state)}</span>` : '') + (shown.length
+    ? shown.map((x) => `<span class="split-part"><i style="background:var(${x.color})"></i>${esc(watts(x.w))} ${esc(x.label)}</span>`).join('')
+    : `<span class="faint">${esc(empty)}</span>`);
+  return `<div class="split-row"><div class="split-title">${esc(title)}<b>${esc(total)}</b></div>${bar}<div class="split-text">${text}</div></div>`;
+}
+
+function statusRow(title, status) {
+  const badge = status.on === true ? '<span class="badge ok">On</span>' : status.on === false ? '<span class="badge off">Off</span>' : '';
+  return `<div class="split-row"><div class="split-title">${esc(title)}${badge}</div><div class="split-text">${esc(status.text)}</div></div>`;
+}
+
+function breakdown({ solar, load, battery, soc, split, names, gridStatus, genStatus }) {
+  const b = battery || 0;
+  const pct = soc !== null && soc !== undefined ? ` · ${fmtNumber(soc, 0)}%` : '';
+  const battState = `${b < -TH ? 'Charging' : b > TH ? 'Discharging' : 'Idle'}${pct}`;
+  const battItems = b < -TH
+    ? [
+        { w: split.solarToBattery, label: 'from solar', color: '--solar' },
+        { w: split.generatorToBattery, label: `from ${names.generator}`, color: '--generator' },
+        { w: split.gridToBattery, label: `from ${names.grid}`, color: '--grid' },
+      ]
+    : [
+        { w: split.batteryToHome, label: 'to the home', color: '--load' },
+        { w: split.batteryToGrid, label: `to ${names.grid}`, color: '--export' },
+      ];
+  return `<div class="flow-split">
+    ${splitRow('Solar', watts(solar), [
+      { w: split.solarToHome, label: 'to the home', color: '--load' },
+      { w: split.solarToBattery, label: 'charging the battery', color: '--battery' },
+      { w: split.solarToGrid, label: `to ${names.grid}`, color: '--export' },
+    ], 'No solar right now')}
+    ${splitRow('Home', watts(load), [
+      { w: split.solarToHome, label: 'from solar', color: '--solar' },
+      { w: split.batteryToHome, label: 'from the battery', color: '--discharge' },
+      { w: split.generatorToHome, label: `from ${names.generator}`, color: '--generator' },
+      { w: split.gridToHome, label: `from ${names.grid}`, color: '--grid' },
+    ], 'Using almost nothing')}
+    ${splitRow('Battery', watts(Math.abs(b)), battItems, b > TH || b < -TH ? 'not matched to the other readings' : '', battState)}
+    ${gridStatus ? statusRow(names.grid, gridStatus) : ''}
+    ${genStatus ? statusRow(names.generator, genStatus) : ''}
+  </div>`;
+}
 
 function kpi({ label, power, color, ic, sub, pct }) {
   const p = typeof power === 'object' && power !== null ? power : fmtPower(power);
@@ -27,7 +114,7 @@ function seg(x1, y1, x2, y2, r1 = 31, r2 = 33) {
   return `M${(x1 + ux * r1).toFixed(1)} ${(y1 + uy * r1).toFixed(1)} L${(x2 - ux * r2).toFixed(1)} ${(y2 - uy * r2).toFixed(1)}`;
 }
 
-function flowSvg({ solar, load, grid, generator, battery, soc, showGenerator, names }) {
+function flowSvg({ solar, load, grid, generator, battery, soc, showGenerator, names, gridOn, genOn }) {
   const c = {
     solar: cssVar('--solar'),
     load: cssVar('--load'),
@@ -41,8 +128,8 @@ function flowSvg({ solar, load, grid, generator, battery, soc, showGenerator, na
     const p = fmtPower(w === null || w === undefined ? null : Math.abs(w));
     return `${p.value} ${p.unit}`.trim();
   };
-  const node = (x, y, label, value, color, ic) => `
-    <g>
+  const node = (x, y, label, value, color, ic, off) => `
+    <g${off ? ' class="node-off"' : ''}>
       <circle class="node-circle" cx="${x}" cy="${y}" r="30" stroke="${color}"/>
       <g transform="translate(${x - 11}, ${y - 11})" style="color:${color}"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${iconInner(ic)}</svg></g>
       <text class="node-value" x="${x}" y="${y + 50}">${esc(value)}</text>
@@ -56,7 +143,8 @@ function flowSvg({ solar, load, grid, generator, battery, soc, showGenerator, na
   const genPos = [62, 236];
   const g = grid || 0;
   const gridColor = g < -TH ? c.export : c.grid;
-  const gridLabel = g > TH ? `${names.grid} · importing` : g < -TH ? `${names.grid} · exporting` : names.grid;
+  const gridLabel = gridOn === false ? `${names.grid} · off` : g > TH ? `${names.grid} · importing` : g < -TH ? `${names.grid} · exporting` : gridOn ? `${names.grid} · on` : names.grid;
+  const genLabel = genOn === false ? `${names.generator} · off` : (generator || 0) > TH ? `${names.generator} · running` : genOn ? `${names.generator} · on` : names.generator;
   return `<svg class="flow" viewBox="0 0 440 345" role="img" aria-label="Power flow diagram">
     ${line(seg(CX, 46, CX, CY), (solar || 0) > TH, c.solar, false)}
     ${line(seg(gridPos[0], gridPos[1], CX, CY), Math.abs(g) > TH, gridColor, g < 0)}
@@ -64,8 +152,8 @@ function flowSvg({ solar, load, grid, generator, battery, soc, showGenerator, na
     ${line(seg(378, CY, CX, CY), (load || 0) > TH, c.load, true)}
     ${line(seg(CX, 266, CX, CY), Math.abs(battery || 0) > TH, c.battery, (battery || 0) < 0)}
     ${node(CX, 46, 'Solar', fp(solar), c.solar, 'sun')}
-    ${node(gridPos[0], gridPos[1], gridLabel, fp(grid), gridColor, 'grid')}
-    ${showGenerator ? node(genPos[0], genPos[1], (generator || 0) > TH ? `${names.generator} · running` : names.generator, fp(generator), c.generator, 'plug') : ''}
+    ${node(gridPos[0], gridPos[1], gridLabel, gridOn === false ? 'Off' : fp(grid), gridColor, 'grid', gridOn === false)}
+    ${showGenerator ? node(genPos[0], genPos[1], genLabel, genOn === false ? 'Off' : fp(generator), c.generator, 'plug', genOn === false) : ''}
     ${node(378, CY, 'Home', fp(load), c.load, 'home')}
     ${node(CX, 266, `Battery${soc !== null && soc !== undefined ? ` · ${fmtNumber(soc, 0)}%` : ''}`, fp(battery), c.battery, 'battery')}
     <g><circle class="node-circle" cx="${CX}" cy="${CY}" r="32" stroke="${c.inv}"/>
@@ -195,7 +283,17 @@ export async function mount(root, ctx) {
       ? `<div class="alert warn" style="margin:0">${icon('warn')}<div class="grow">Latest data from DeyeCloud is ${esc(fmtAgo(s.lastTs))}. The logger may be offline or the collector is not running.</div></div>`
       : '';
 
-    const gridState = grid === null ? '' : grid > TH ? 'Importing' : grid < -TH ? 'Exporting' : 'Idle';
+    const split = splitFlows({ solar, load, grid, generator, battery });
+    const gridOn = f.grid.hidden ? null : sourceOn(f.gridVoltage, grid, SOURCE_IDLE);
+    const genOn = showGenerator ? sourceOn(f.generatorVoltage, generator, SOURCE_IDLE) : null;
+    const gridStatus = f.grid.hidden
+      ? null
+      : sourceStatus({ on: gridOn, power: grid, toHome: split.gridToHome, toBattery: split.gridToBattery, isGrid: true, split, load });
+    const genStatus = showGenerator
+      ? sourceStatus({ on: genOn, power: generator, toHome: split.generatorToHome, toBattery: split.generatorToBattery, isGrid: false, split, load })
+      : null;
+    const tileState = (st) => (!st ? '' : st.on === null ? st.short : st.on ? `On · ${st.short.toLowerCase()}` : 'Off');
+    const gridState = tileState(gridStatus);
     const tiles = [
       kpi({ label: 'Solar', power: solar, color: '--solar', ic: 'sun', sub: cap && solar !== null ? `${fmtNumber((solar / cap) * 100, 0)}% of ${fmtNumber(s.installedCapacity)} kWp` : 'PV generation', pct: cap && solar !== null ? (solar / cap) * 100 : null }),
       kpi({ label: 'Home load', power: load, color: '--load', ic: 'home', sub: e.consumptionValue !== undefined ? `${esc(kwh(e.consumptionValue))} today` : 'Consumption' }),
@@ -214,7 +312,7 @@ export async function mount(root, ctx) {
           power: generator,
           color: '--generator',
           ic: 'plug',
-          sub: `${(generator || 0) > TH ? 'Running' : 'Off'}${genToday !== null ? ` · ${esc(kwh(genToday))} today` : ''}`,
+          sub: `${tileState(genStatus)}${genToday !== null ? ` · ${esc(kwh(genToday))} today` : ''}`,
         })
       );
     }
@@ -231,7 +329,9 @@ export async function mount(root, ctx) {
     );
     $('#kpis', root).innerHTML = tiles.join('');
 
-    $('#flow', root).innerHTML = flowSvg({ solar, load, grid, generator, battery, soc, showGenerator, names });
+    $('#flow', root).innerHTML =
+      flowSvg({ solar, load, grid, generator, battery, soc, showGenerator, names, gridOn, genOn }) +
+      breakdown({ solar, load, battery, soc, split, names, gridStatus, genStatus });
     $('#updated', root).textContent = s.lastTs ? `Updated ${fmtAgo(s.lastTs)} · ${fmtTime(s.lastTs, { timeStyle: 'short' })}` : '';
 
     const mini = (label, v, color) => {

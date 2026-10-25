@@ -327,6 +327,26 @@ table.table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .flow .line-active.rev { animation-direction: reverse; }
 @keyframes flow { to { stroke-dashoffset: -14; } }
 @media (prefers-reduced-motion: reduce) { .flow .line-active { animation: none; stroke-dasharray: none; } }
+.flow .node-off .node-circle { stroke: var(--border-strong); stroke-dasharray: 4 4; }
+.flow .node-off g { color: var(--text-3) !important; }
+.flow .node-off .node-value { fill: var(--text-3); }
+
+/* Where the power goes: one row per node with a stacked bar of its sources or destinations. */
+.flow-split { display: grid; gap: 12px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+.split-row { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 4px 14px; align-items: center; }
+.split-title { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 650; color: var(--text-2); grid-row: span 2; }
+.split-title b { color: var(--text); font-weight: 700; margin-left: auto; white-space: nowrap; }
+.split-row:not(:has(.split-bar)) .split-title { grid-row: auto; }
+.split-bar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--surface-3); }
+.split-bar > span { display: block; height: 100%; transition: width 0.6s; }
+.split-text { display: flex; flex-wrap: wrap; gap: 2px 14px; font-size: 12.5px; color: var(--text-2); }
+.split-part { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.split-part i { width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0; }
+.split-state { font-weight: 650; color: var(--text); }
+@media (max-width: 420px) {
+  .split-row { grid-template-columns: minmax(0, 1fr); }
+  .split-title { grid-row: auto; }
+}
 
 /* ---------- Charts ---------- */
 .chart { width: 100%; height: 380px; }
