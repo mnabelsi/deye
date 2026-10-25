@@ -16,6 +16,7 @@ export const ROLES = [
   { role: 'gridVoltage', label: 'Grid voltage', kind: 'presence', hint: 'shows when the grid has power' },
   { role: 'generatorVoltage', label: 'Generator voltage', kind: 'presence', hint: 'shows when the generator runs' },
   { role: 'loadVoltage', label: 'Home voltage', kind: 'voltage', hint: 'turns home power into amps' },
+  { role: 'batteryVoltage', label: 'Battery voltage', kind: 'voltage', hint: 'turns battery power into amps' },
 ];
 
 // Display names for the two outside sources, e.g. "Kadisha" and "Eshtirak". Set in Customize.
@@ -148,6 +149,8 @@ function auto(role, station, metrics) {
       return presence(devices, GEN);
     case 'loadVoltage':
       return presence(devices, /load|ups|backup|output|^ac.?volt/i, [/grid/i, GEN], ['v']);
+    case 'batteryVoltage':
+      return presence(devices, /batt|bms/i, [GEN], ['v']);
     default:
       return null;
   }
@@ -243,9 +246,9 @@ export function sourceOn(presenceNode, powerW, idleW) {
 const MIN_VOLTS = 50;
 
 /** A node's reading in volts, or null when it isn't a live voltage (missing, Hz, or source off). */
-export function nodeVolts(node) {
+export function nodeVolts(node, min = MIN_VOLTS) {
   if (!node || node.hidden || !node.parts.length || node.value === null) return null;
-  return unitOf(node.parts[0].metric) === 'v' && node.value >= MIN_VOLTS ? node.value : null;
+  return unitOf(node.parts[0].metric) === 'v' && node.value >= min ? node.value : null;
 }
 
 /** 3 when the inverter reports a live third phase (L3, or R/S/T as …TWC), else 1. */
@@ -261,6 +264,88 @@ export function toAmps(w, volts, phases = 1) {
   if (w === null || w === undefined || !volts) return null;
   if (phases === 3) return volts > 300 ? w / (Math.sqrt(3) * volts) : w / (3 * volts);
   return w / volts;
+}
+
+// ---------- battery reserve and inverter mode ----------
+
+const num = (v) => (v === null || v === undefined || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
+const minutesOf = (hhmm) => {
+  const m = /^(\d{1,2}):(\d{2})/.exec(String(hhmm || ''));
+  return m ? Number(m[1]) * 60 + Number(m[2]) : null;
+};
+
+// Minutes since midnight at an instant in the station's time zone.
+function localMinutes(ms, timeZone) {
+  try {
+    const parts = new Intl.DateTimeFormat('en-GB', { timeZone: timeZone || undefined, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(ms));
+    const get = (t) => Number(parts.find((x) => x.type === t).value);
+    return get('hour') * 60 + get('minute');
+  } catch {
+    const d = new Date(ms);
+    return d.getHours() * 60 + d.getMinutes();
+  }
+}
+
+/**
+ * The time-of-use slot in force at an instant: { from, to, soc, gridCharge, genCharge }, or null
+ * when time of use is off. Each of the inverter's slots runs from its time to the next slot's.
+ */
+export function touSlot(tou, ms, timeZone) {
+  if (!tou || !['on', 'true', '1', 'enable', 'enabled'].includes(String(tou.touAction).toLowerCase())) return null;
+  const items = (tou.timeUseSettingItems || [])
+    .map((x) => ({ ...x, m: minutesOf(x.time) }))
+    .filter((x) => x.m !== null)
+    .sort((a, b) => a.m - b.m);
+  if (!items.length) return null;
+  const now = localMinutes(ms, timeZone);
+  let i = items.length - 1; // before the first slot of the day, the last one is still running
+  items.forEach((x, k) => {
+    if (x.m <= now) i = k;
+  });
+  const cur = items[i];
+  return { from: cur.time, to: items[(i + 1) % items.length].time, soc: num(cur.soc), gridCharge: Boolean(cur.enableGridCharge), genCharge: Boolean(cur.enableGeneration) };
+}
+
+const LABELS = {
+  BATTERY_FIRST: 'Battery first',
+  LOAD_FIRST: 'Load first',
+  SELLING_FIRST: 'Selling first',
+  ZERO_EXPORT_TO_LOAD: 'Zero export to load',
+  ZERO_EXPORT_TO_CT: 'Zero export to CT',
+};
+const modeLabel = (v) => (v ? LABELS[String(v).toUpperCase()] || String(v).replace(/_/g, ' ').toLowerCase().replace(/^./, (c) => c.toUpperCase()) : null);
+
+/**
+ * The battery's reserve and the inverter's mode, from its settings (read hourly) or Customize.
+ * The reserve is the charge the battery keeps right now: with time of use on, the current slot's
+ * SOC while the grid or generator can take over; otherwise, and during an outage, Low Batt.
+ * `sourceAvailable` is whether the grid or generator has power (null when unknown).
+ */
+export function batteryInfo(station, { sourceAvailable = null, now = Date.now() } = {}) {
+  const cfg = (station.devices || []).map((d) => d.config).find((c) => c && (c.battery || c.system || c.tou)) || {};
+  const b = cfg.battery || {};
+  const sys = cfg.system || {};
+  const low = num(b.battLowCapacity);
+  const slot = touSlot(cfg.tou, now, station.timezone);
+  const manual = num(station.flowMap && station.flowMap.reserve);
+  let reserve = null;
+  let reserveFrom = null;
+  if (manual !== null) [reserve, reserveFrom] = [manual, 'manual'];
+  else if (slot && slot.soc !== null && sourceAvailable !== false) [reserve, reserveFrom] = [slot.soc, 'tou'];
+  else if (low !== null) [reserve, reserveFrom] = [low, 'low'];
+  return {
+    reserve,
+    reserveFrom,
+    low,
+    shutdown: num(b.battShutDownCapacity),
+    slot,
+    pattern: modeLabel(sys.energyPattern),
+    workMode: modeLabel(sys.systemWorkMode),
+    capacityAh: num(b.battCapacity),
+    maxChargeA: num(b.maxChargeCurrent),
+    maxDischargeA: num(b.maxDischargeCurrent),
+    error: cfg.batteryError || null,
+  };
 }
 
 export function describeParts(p) {

@@ -510,6 +510,21 @@ api.post('/device/history', (req, res) => {
   res.json(ok({ deviceSn, deviceType: 'INVERTER', dataList }));
 });
 
+// Inverter settings (read-only): time-of-use keeps RESERVE_SOC while the grid or generator can take
+// over, and Low Batt (MIN_SOC) is how far the battery goes during an outage, as simulated above.
+api.post('/config/battery', (req, res) => {
+  res.json(ok({ battCapacity: Math.round((BATTERY_KWH * 1000) / 51.2), battLowCapacity: MIN_SOC, battShutDownCapacity: 10, maxChargeCurrent: 100, maxDischargeCurrent: 120 }));
+});
+
+api.post('/config/system', (req, res) => {
+  res.json(ok({ energyPattern: 'LOAD_FIRST', systemWorkMode: 'ZERO_EXPORT_TO_CT', maxSellPower: INVERTER_W, maxSolarPower: INVERTER_W, zeroExportPower: 20 }));
+});
+
+api.post('/config/tou', (req, res) => {
+  const slot = (time) => ({ time, power: GRID_CHARGE_W, soc: RESERVE_SOC, enableGridCharge: true, enableGeneration: true });
+  res.json(ok({ touAction: 'on', timeUseSettingItems: ['01:00', '05:00', '09:00', '13:00', '17:00', '21:00'].map(slot) }));
+});
+
 app.use('/v1.0', api);
 if (require.main === module) {
   app.listen(PORT, () => console.log(`[mock] DeyeCloud mock on http://localhost:${PORT}/v1.0  (appId/appSecret: demo, password: demo)`));

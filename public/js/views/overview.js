@@ -1,13 +1,15 @@
 import { api } from '../api.js';
 import { $, $$, esc, icon, cssVar, fmtPower, fmtEnergy, fmtNumber, fmtAgo, fmtTime, fmtValue, startOfDay, localDateStr, modal, toast } from '../util.js';
 import { createTimeChart, renderSeriesTable } from '../charts.js';
-import { ROLES, DEFAULT_NAMES, resolveFlow, describeParts, combineSeries, generatorEnergyToday, candidates, sourceNames, splitFlows, sourceOn, nodeVolts, phaseCount, toAmps } from '../flow.js';
+import { ROLES, DEFAULT_NAMES, resolveFlow, describeParts, combineSeries, generatorEnergyToday, candidates, sourceNames, splitFlows, sourceOn, nodeVolts, phaseCount, toAmps, batteryInfo } from '../flow.js';
 
 const TH = 15; // watts below which a flow counts as idle
 // Zero-export inverters keep the grid hovering a few tens of watts from 0 even when it isn't needed.
 const SOURCE_IDLE = 50;
 
 const NOMINAL_VOLTS = 230; // used for amps when no voltage reading is available
+const NOMINAL_BATTERY_VOLTS = 51.2; // a 48 V lithium battery, when there is no battery voltage reading
+const AT_RESERVE = 1; // SOC points above the reserve that still count as "at the reserve"
 
 const watts = (w) => {
   const p = fmtPower(w);
@@ -15,39 +17,40 @@ const watts = (w) => {
 };
 
 /**
- * Formats home, grid and generator power in the chosen unit (W or A). Amps are watts ÷ the
- * measured voltage of that source (per phase on three phases). Solar and battery always stay in
- * watts: they are DC, where amps at the house voltage mean nothing.
+ * Formats home, grid, generator and battery power in the chosen unit (W or A). AC amps are watts
+ * ÷ the measured voltage of that source (per phase on three phases); battery amps are DC, watts ÷
+ * the battery voltage. Solar always stays in watts: its strings run at different voltages.
  */
 function powerUnits({ unit, f, station, gridOn, genOn }) {
   const phases = phaseCount(station);
   const gv = nodeVolts(f.gridVoltage);
   const nv = nodeVolts(f.generatorVoltage);
   const lv = nodeVolts(f.loadVoltage);
+  const bv = nodeVolts(f.batteryVoltage, 5);
   const homeV = lv || (gridOn && gv) || (genOn && nv) || null;
-  const volts = { grid: gv || lv || NOMINAL_VOLTS, generator: nv || lv || NOMINAL_VOLTS, home: homeV || NOMINAL_VOLTS };
-  const measured = { grid: Boolean(gv || lv), generator: Boolean(nv || lv), home: Boolean(homeV) };
+  const volts = { grid: gv || lv || NOMINAL_VOLTS, generator: nv || lv || NOMINAL_VOLTS, home: homeV || NOMINAL_VOLTS, battery: bv || NOMINAL_BATTERY_VOLTS };
+  const measured = { grid: Boolean(gv || lv), generator: Boolean(nv || lv), home: Boolean(homeV), battery: Boolean(bv) };
   const amps = unit === 'A';
   const obj = (w, kind) => {
     const abs = w === null || w === undefined ? null : Math.abs(w);
     if (!amps || abs === null) return fmtPower(abs);
-    const a = toAmps(abs, volts[kind], phases);
+    const a = kind === 'battery' ? abs / volts.battery : toAmps(abs, volts[kind], phases);
     return { value: fmtNumber(a, a < 100 ? 1 : 0), unit: 'A' };
   };
   const text = (kind) => (w) => {
     const p = obj(w, kind);
     return `${p.value} ${p.unit}`.trim();
   };
-  const on = { home: true, grid: gridOn !== false, generator: genOn !== false };
-  return { amps, phases, volts, measured, on, obj, home: text('home'), grid: text('grid'), generator: text('generator') };
+  const on = { home: true, grid: gridOn !== false, generator: genOn !== false, battery: true };
+  return { amps, phases, volts, measured, on, obj, home: text('home'), grid: text('grid'), generator: text('generator'), battery: text('battery') };
 }
 
 // Which voltages the amps come from; a source that is off has none to show.
 function ampsNote(u, names, showGenerator) {
-  const v = (kind, label) => `${label} ${fmtNumber(u.volts[kind], 0)} V${u.measured[kind] ? '' : ' assumed'}`;
-  const sources = [['home', 'home'], ['grid', names.grid], ...(showGenerator ? [['generator', names.generator]] : [])];
+  const v = (kind, label) => `${label} ${fmtNumber(u.volts[kind], kind === 'battery' ? 1 : 0)} V${u.measured[kind] ? '' : ' assumed'}`;
+  const sources = [['home', 'home'], ['grid', names.grid], ...(showGenerator ? [['generator', names.generator]] : []), ['battery', 'battery']];
   const list = sources.filter(([kind]) => u.on[kind]).map(([kind, label]) => v(kind, label));
-  return `<p class="split-note">Amps = watts ÷ voltage (${esc(list.join(' · '))})${u.phases === 3 ? ', per phase on this 3-phase system' : ''}. Solar and battery stay in watts.</p>`;
+  return `<p class="split-note">Amps = watts ÷ voltage (${esc(list.join(' · '))})${u.phases === 3 ? '; AC amps are per phase on this 3-phase system' : ''}. Solar stays in watts.</p>`;
 }
 
 // Why an available grid/generator isn't needed right now.
@@ -80,17 +83,72 @@ function sourceStatus({ on, power, toHome, toBattery, isGrid, split, load, fmt =
   return { on: null, short: 'Not used', text: `Not used${why ? `, ${why}` : ''} (no voltage reading to tell whether it is on)` };
 }
 
-// One row of the breakdown: a stacked bar and "x to A · y to B" for the parts above TH.
-function splitRow(title, total, items, empty, state = '', fmt = watts) {
+const duration = (hours) => {
+  const min = Math.max(10, Math.round((hours * 60) / 10) * 10);
+  return min < 60 ? `${min} min` : `${Math.floor(min / 60)} h${min % 60 ? ` ${min % 60} min` : ''}`;
+};
+
+// Where the reserve comes from, e.g. "reserve 35% (time of use 17:00–21:00)".
+function reserveText(info, names, sourceAvailable) {
+  if (info.reserve === null) return '';
+  const r = `reserve ${fmtNumber(info.reserve, 0)}%`;
+  if (info.reserveFrom === 'manual') return `${r} (set in Customize)`;
+  if (info.reserveFrom === 'tou') return `${r} (time of use ${info.slot.from}–${info.slot.to})`;
+  if (info.slot && sourceAvailable === false) return `${r} (Low Batt, during the outage; ${fmtNumber(info.slot.soc, 0)}% again once power is back)`;
+  return `${r} (Low Batt setting)`;
+}
+
+/**
+ * One sentence on what the battery is doing relative to its reserve, with a time estimate when the
+ * battery size is known (Ah from the inverter's settings × battery voltage).
+ */
+function batteryStatus({ soc, battery, info, kwh, sourceOn: srcOn, sourceName, names, hasGenerator }) {
+  if (soc === null || soc === undefined) return '';
+  const b = battery || 0;
+  const r = info.reserve;
+  const floor = info.low !== null ? info.low : info.shutdown;
+  if (b < -TH) {
+    if (soc >= 99) return 'Topping up the last few percent';
+    const eta = kwh ? `, full in about ${duration((((100 - soc) / 100) * kwh) / (-b / 1000))} at this rate` : '';
+    return r !== null && soc < r - AT_RESERVE ? `Below the reserve, recharging${eta}` : `Charging${eta}`;
+  }
+  if (b > TH) {
+    if (r === null) return kwh && floor !== null && soc > floor ? `Discharging, about ${duration((((soc - floor) / 100) * kwh) / (b / 1000))} to ${floor}% at this rate` : 'Discharging';
+    if (soc > r + AT_RESERVE) {
+      const eta = kwh ? `; reaches it in about ${duration((((soc - r) / 100) * kwh) / (b / 1000))} at this rate` : '';
+      return `${fmtNumber(soc - r, 0)}% above the reserve${eta}`;
+    }
+    if (!srcOn) return `Below the reserve: ${hasGenerator ? `${names.grid} and ${names.generator} are` : `${names.grid} is`} off, so the battery keeps the home running${floor !== null ? ` down to ${floor}%` : ''}`;
+    return 'At the reserve, about to hand over';
+  }
+  if (soc >= 99) return 'Full';
+  if (r !== null && soc <= r + AT_RESERVE) return `Reserve reached: holding at ${fmtNumber(soc, 0)}%${sourceName ? `, the home runs on ${sourceName}` : ''}`;
+  return r !== null ? `Standing by, ${fmtNumber(soc - r, 0)}% above the reserve` : 'Standing by';
+}
+
+// The battery's charge as a bar with a mark at the reserve.
+function socBar(soc, reserve) {
+  if (soc === null || soc === undefined) return '<div class="split-bar"></div>';
+  const low = reserve !== null && soc <= reserve + AT_RESERVE;
+  const mark = reserve !== null ? `<i style="left:${Math.max(0, Math.min(100, reserve))}%" title="Reserve ${fmtNumber(reserve, 0)}%"></i>` : '';
+  return `<div class="soc-bar${low ? ' low' : ''}"><span style="width:${Math.max(0, Math.min(100, soc))}%"></span>${mark}</div>`;
+}
+
+/**
+ * One row of the breakdown: a stacked bar and "x to A · y to B" for the parts above TH.
+ * Options: empty (text when nothing is above TH), state (shown first), fmt (power formatter),
+ * bar (HTML replacing the stacked bar), after (an extra line under the text).
+ */
+function splitRow(title, total, items, { empty = '', state = '', fmt = watts, bar = null, after = '' } = {}) {
   const shown = items.filter((x) => x.w > TH);
   const sum = shown.reduce((a, x) => a + x.w, 0);
-  const bar = sum > 0
+  const stacked = sum > 0
     ? `<div class="split-bar">${shown.map((x) => `<span style="width:${((x.w / sum) * 100).toFixed(1)}%;background:var(${x.color})"></span>`).join('')}</div>`
     : '<div class="split-bar"></div>';
   const text = (state ? `<span class="split-state">${esc(state)}</span>` : '') + (shown.length
     ? shown.map((x) => `<span class="split-part"><i style="background:var(${x.color})"></i>${esc(fmt(x.w))} ${esc(x.label)}</span>`).join('')
     : `<span class="faint">${esc(empty)}</span>`);
-  return `<div class="split-row"><div class="split-title">${esc(title)}<b>${esc(total)}</b></div>${bar}<div class="split-text">${text}</div></div>`;
+  return `<div class="split-row"><div class="split-title">${esc(title)}<b>${esc(total)}</b></div>${bar || stacked}<div class="split-text">${text}</div>${after}</div>`;
 }
 
 function statusRow(title, status) {
@@ -98,7 +156,7 @@ function statusRow(title, status) {
   return `<div class="split-row"><div class="split-title">${esc(title)}${badge}</div><div class="split-text">${esc(status.text)}</div></div>`;
 }
 
-function breakdown({ solar, load, battery, soc, split, names, gridStatus, genStatus, u, showGenerator }) {
+function breakdown({ solar, load, battery, soc, split, names, gridStatus, genStatus, u, showGenerator, batt }) {
   const b = battery || 0;
   const pct = soc !== null && soc !== undefined ? ` · ${fmtNumber(soc, 0)}%` : '';
   const battState = `${b < -TH ? 'Charging' : b > TH ? 'Discharging' : 'Idle'}${pct}`;
@@ -112,19 +170,32 @@ function breakdown({ solar, load, battery, soc, split, names, gridStatus, genSta
         { w: split.batteryToHome, label: 'to the home', color: '--load' },
         { w: split.batteryToGrid, label: `to ${names.grid}`, color: '--export' },
       ];
+  // Mode chips and what the battery is doing relative to its reserve, plus amps against the limit.
+  const info = batt.info;
+  const maxA = b < -TH ? info.maxChargeA : b > TH ? info.maxDischargeA : null;
+  const limit = u.amps && maxA ? ` · ${u.battery(b)} of the ${fmtNumber(maxA, 0)} A ${b < 0 ? 'charge' : 'discharge'} limit` : '';
+  const chips = [info.pattern, info.workMode].filter(Boolean).map((x) => `<span class="badge">${esc(x)}</span>`).join('');
+  const detail = [batt.status, batt.reserveText].filter(Boolean).join(' · ') + limit;
+  const after = chips || detail ? `<div class="split-text split-sub">${chips}<span>${esc(detail)}</span></div>` : '';
   return `<div class="flow-split">
     ${splitRow('Solar', watts(solar), [
       { w: split.solarToHome, label: 'to the home', color: '--load' },
       { w: split.solarToBattery, label: 'charging the battery', color: '--battery' },
       { w: split.solarToGrid, label: `to ${names.grid}`, color: '--export' },
-    ], 'No solar right now')}
+    ], { empty: 'No solar right now' })}
     ${splitRow('Home', u.home(load), [
       { w: split.solarToHome, label: 'from solar', color: '--solar' },
       { w: split.batteryToHome, label: 'from the battery', color: '--discharge' },
       { w: split.generatorToHome, label: `from ${names.generator}`, color: '--generator' },
       { w: split.gridToHome, label: `from ${names.grid}`, color: '--grid' },
-    ], 'Using almost nothing', '', u.home)}
-    ${splitRow('Battery', watts(Math.abs(b)), battItems, b > TH || b < -TH ? 'not matched to the other readings' : '', battState)}
+    ], { empty: 'Using almost nothing', fmt: u.home })}
+    ${splitRow('Battery', u.battery(b), battItems, {
+      empty: b > TH || b < -TH ? 'not matched to the other readings' : '',
+      state: battState,
+      fmt: u.battery,
+      bar: socBar(soc, info.reserve),
+      after,
+    })}
     ${gridStatus ? statusRow(names.grid, gridStatus) : ''}
     ${genStatus ? statusRow(names.generator, genStatus) : ''}
     ${u.amps ? ampsNote(u, names, showGenerator) : ''}
@@ -153,7 +224,7 @@ function seg(x1, y1, x2, y2, r1 = 31, r2 = 33) {
   return `M${(x1 + ux * r1).toFixed(1)} ${(y1 + uy * r1).toFixed(1)} L${(x2 - ux * r2).toFixed(1)} ${(y2 - uy * r2).toFixed(1)}`;
 }
 
-function flowSvg({ solar, load, grid, generator, battery, soc, showGenerator, names, gridOn, genOn, u }) {
+function flowSvg({ solar, load, grid, generator, battery, soc, showGenerator, names, gridOn, genOn, u, reserve }) {
   const c = {
     solar: cssVar('--solar'),
     load: cssVar('--load'),
@@ -161,18 +232,19 @@ function flowSvg({ solar, load, grid, generator, battery, soc, showGenerator, na
     export: cssVar('--export'),
     generator: cssVar('--generator'),
     battery: cssVar('--battery'),
+    warn: cssVar('--warning'),
     inv: cssVar('--primary'),
   };
   const fp = (w) => {
     const p = fmtPower(w === null || w === undefined ? null : Math.abs(w));
     return `${p.value} ${p.unit}`.trim();
   };
-  const node = (x, y, label, value, color, ic, off) => `
+  const node = (x, y, label, value, color, ic, off, dy = 0) => `
     <g${off ? ' class="node-off"' : ''}>
       <circle class="node-circle" cx="${x}" cy="${y}" r="30" stroke="${color}"/>
       <g transform="translate(${x - 11}, ${y - 11})" style="color:${color}"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${iconInner(ic)}</svg></g>
-      <text class="node-value" x="${x}" y="${y + 50}">${esc(value)}</text>
-      <text class="node-label" x="${x}" y="${y + 66}">${esc(label)}</text>
+      <text class="node-value" x="${x}" y="${y + 50 + dy}">${esc(value)}</text>
+      <text class="node-label" x="${x}" y="${y + 66 + dy}">${esc(label)}</text>
     </g>`;
   // Lines are drawn node → inverter; "rev" animates the other way (power flowing out to the node).
   const line = (d, active, color, reverse) => `<path class="line" d="${d}"/>${active ? `<path class="line-active ${reverse ? 'rev' : ''}" d="${d}" stroke="${color}"/>` : ''}`;
@@ -184,17 +256,34 @@ function flowSvg({ solar, load, grid, generator, battery, soc, showGenerator, na
   const gridColor = g < -TH ? c.export : c.grid;
   const gridLabel = gridOn === false ? `${names.grid} · off` : g > TH ? `${names.grid} · importing` : g < -TH ? `${names.grid} · exporting` : gridOn ? `${names.grid} · on` : names.grid;
   const genLabel = genOn === false ? `${names.generator} · off` : (generator || 0) > TH ? `${names.generator} · running` : genOn ? `${names.generator} · on` : names.generator;
-  return `<svg class="flow" viewBox="0 0 440 345" role="img" aria-label="Power flow diagram">
+  // Charge ring around the battery, amber at or below the reserve, with a mark at the reserve.
+  const socRing = (x, y) => {
+    if (soc === null || soc === undefined) return '';
+    const r = 36;
+    const C = 2 * Math.PI * r;
+    const low = reserve !== null && soc <= reserve + AT_RESERVE;
+    let tick = '';
+    if (reserve !== null) {
+      const a = (Math.max(0, Math.min(100, reserve)) / 100) * 2 * Math.PI - Math.PI / 2;
+      const pt = (rr) => `${(x + rr * Math.cos(a)).toFixed(1)} ${(y + rr * Math.sin(a)).toFixed(1)}`;
+      tick = `<path class="soc-tick" d="M${pt(r - 6)} L${pt(r + 6)}"><title>Reserve ${fmtNumber(reserve, 0)}%</title></path>`;
+    }
+    return `<circle class="soc-ring-bg" cx="${x}" cy="${y}" r="${r}"/>
+      <circle class="soc-ring" cx="${x}" cy="${y}" r="${r}" stroke="${low ? c.warn : c.battery}" stroke-dasharray="${((Math.max(0, Math.min(100, soc)) / 100) * C).toFixed(1)} ${C.toFixed(1)}" transform="rotate(-90 ${x} ${y})"/>${tick}`;
+  };
+  const battLabel = `Battery${soc !== null && soc !== undefined ? ` · ${fmtNumber(soc, 0)}%` : ''}${reserve !== null && soc !== null && soc !== undefined ? ` · reserve ${fmtNumber(reserve, 0)}%` : ''}`;
+  return `<svg class="flow" viewBox="0 0 440 353" role="img" aria-label="Power flow diagram">
     ${line(seg(CX, 46, CX, CY), (solar || 0) > TH, c.solar, false)}
     ${line(seg(gridPos[0], gridPos[1], CX, CY), Math.abs(g) > TH, gridColor, g < 0)}
     ${showGenerator ? line(seg(genPos[0], genPos[1], CX, CY), (generator || 0) > TH, c.generator, false) : ''}
     ${line(seg(378, CY, CX, CY), (load || 0) > TH, c.load, true)}
-    ${line(seg(CX, 266, CX, CY), Math.abs(battery || 0) > TH, c.battery, (battery || 0) < 0)}
+    ${line(seg(CX, 266, CX, CY, 41), Math.abs(battery || 0) > TH, c.battery, (battery || 0) < 0)}
     ${node(CX, 46, 'Solar', fp(solar), c.solar, 'sun')}
     ${node(gridPos[0], gridPos[1], gridLabel, gridOn === false ? 'Off' : u.grid(grid), gridColor, 'grid', gridOn === false)}
     ${showGenerator ? node(genPos[0], genPos[1], genLabel, genOn === false ? 'Off' : u.generator(generator), c.generator, 'plug', genOn === false) : ''}
     ${node(378, CY, 'Home', u.home(load), c.load, 'home')}
-    ${node(CX, 266, `Battery${soc !== null && soc !== undefined ? ` · ${fmtNumber(soc, 0)}%` : ''}`, fp(battery), c.battery, 'battery')}
+    ${socRing(CX, 266)}
+    ${node(CX, 266, battLabel, u.battery(battery), c.battery, 'battery', false, 8)}
     <g><circle class="node-circle" cx="${CX}" cy="${CY}" r="32" stroke="${c.inv}"/>
       <g transform="translate(${CX - 11},${CY - 11})" style="color:${c.inv}"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${iconInner('bolt')}</svg></g></g>
   </svg>`;
@@ -360,6 +449,22 @@ export async function mount(root, ctx) {
     const u = powerUnits({ unit: st.unit, f, station: s, gridOn, genOn });
     // In amps the tiles also keep the watts, so both are visible.
     const alsoW = (w) => (u.amps && w !== null ? `${esc(watts(Math.abs(w)))} · ` : '');
+    const sourceAvailable = gridOn || genOn ? true : gridOn === false && (genOn === false || !showGenerator) ? false : null;
+    const info = batteryInfo(s, { sourceAvailable });
+    const batt = {
+      info,
+      reserveText: reserveText(info, names, sourceAvailable),
+      status: batteryStatus({
+        soc,
+        battery,
+        info,
+        kwh: info.capacityAh ? (info.capacityAh * u.volts.battery) / 1000 : null,
+        sourceOn: Boolean(gridOn || genOn),
+        sourceName: gridOn ? names.grid : genOn ? names.generator : null,
+        names,
+        hasGenerator: showGenerator,
+      }),
+    };
     const gridStatus = f.grid.hidden
       ? null
       : sourceStatus({ on: gridOn, power: grid, toHome: split.gridToHome, toBattery: split.gridToBattery, isGrid: true, split, load, fmt: u.grid });
@@ -393,10 +498,10 @@ export async function mount(root, ctx) {
     tiles.push(
       kpi({
         label: 'Battery',
-        power: battery === null ? null : Math.abs(battery),
+        power: u.obj(battery, 'battery'),
         color: '--battery',
         ic: 'battery',
-        sub: `${battery === null ? '' : battery < -TH ? 'Charging' : battery > TH ? 'Discharging' : 'Idle'}${soc !== null ? ` · ${fmtNumber(soc, 0)}% charged` : ''}`,
+        sub: `${alsoW(battery)}${battery === null ? '' : battery < -TH ? 'Charging' : battery > TH ? 'Discharging' : 'Idle'}${soc !== null ? ` · ${fmtNumber(soc, 0)}% charged` : ''}${info.reserve !== null ? ` · reserve ${fmtNumber(info.reserve, 0)}%` : ''}`,
         pct: soc,
       }),
       kpi({ label: 'Solar today', power: fmtEnergy(solarToday), color: '--solar', ic: 'bolt', sub: !s.energyDay ? 'Waiting for daily statistics' : s.energyDay === localDateStr(new Date()) ? 'Daily statistics' : `For ${esc(s.energyDay)}` })
@@ -404,8 +509,8 @@ export async function mount(root, ctx) {
     $('#kpis', root).innerHTML = tiles.join('');
 
     $('#flow', root).innerHTML =
-      flowSvg({ solar, load, grid, generator, battery, soc, showGenerator, names, gridOn, genOn, u }) +
-      breakdown({ solar, load, battery, soc, split, names, gridStatus, genStatus, u, showGenerator });
+      flowSvg({ solar, load, grid, generator, battery, soc, showGenerator, names, gridOn, genOn, u, reserve: info.reserve }) +
+      breakdown({ solar, load, battery, soc, split, names, gridStatus, genStatus, u, showGenerator, batt });
     $('#updated', root).textContent = s.lastTs ? `Updated ${fmtAgo(s.lastTs)} · ${fmtTime(s.lastTs, { timeStyle: 'short' })}` : '';
 
     const mini = (label, v, color) => {
@@ -505,10 +610,16 @@ export async function mount(root, ctx) {
           </select></label>
         ${signed ? `<label class="check small" style="margin-top:-8px"><input type="checkbox" name="${role}Invert" ${cur.invert ? 'checked' : ''}> Invert sign of the chosen reading</label>` : ''}`;
     }).join('');
+    const fromInverter = batteryInfo({ ...s, flowMap: { ...map, reserve: null } });
+    const inverterReserve = fromInverter.reserve === null
+      ? 'not readable from the inverter'
+      : `inverter now: ${fmtNumber(fromInverter.reserve, 0)}%, ${fromInverter.reserveFrom === 'tou' ? 'time of use' : 'Low Batt'}`;
+    const reserveField = `<label class="field">Battery reserve % <span class="hint">leave empty to follow the inverter's settings (${esc(inverterReserve)})</span>
+        <input type="number" name="reserve" min="0" max="100" step="1" value="${map.reserve === undefined || map.reserve === null ? '' : esc(map.reserve)}"></label>`;
     const res = await modal({
       title: 'Customize power flow',
       submitLabel: 'Save',
-      body: `<div class="grid cols-2" style="gap:12px">${nameField('grid', 'Kadisha')}${nameField('generator', 'Eshtirak')}</div>
+      body: `<div class="grid cols-2" style="gap:12px">${nameField('grid', 'Kadisha')}${nameField('generator', 'Eshtirak')}</div>${reserveField}
         <p class="small muted" style="margin:0">Pick the reading that feeds each node. Find names and live values under Devices &amp; Readings (e.g. search “gen” or “grid”).</p>${body}`,
     });
     if (!res) return;
@@ -518,7 +629,7 @@ export async function mount(root, ctx) {
       else if (res[role]) out[role] = { metricId: Number(res[role]), invert: Boolean(res[`${role}Invert`]) };
     }
     try {
-      await api.put(`/api/flowmap/${encodeURIComponent(s.id)}`, { map: out, names: { grid: res.name_grid, generator: res.name_generator } });
+      await api.put(`/api/flowmap/${encodeURIComponent(s.id)}`, { map: out, names: { grid: res.name_grid, generator: res.name_generator }, reserve: res.reserve });
       live = await api.get('/api/live');
       await loadEnergyRow();
       renderLive();

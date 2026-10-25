@@ -249,12 +249,19 @@ router.get('/live', async (req, res) => {
       .filter((d) => String(d.station_id) === id)
       .map((d) => {
         const dm = metrics.filter((m) => m.source_type === 'device' && m.source_id === d.sn);
+        let config = null;
+        try {
+          config = JSON.parse(all[`device_config:${d.sn}`] || 'null');
+        } catch {
+          config = null;
+        }
         return {
           sn: d.sn,
           type: d.device_type,
           connectStatus: d.connect_status,
           lastTs: d.last_ts,
           metrics: dm.map(toMetric),
+          config,
         };
       });
     return {
@@ -279,7 +286,7 @@ router.get('/live', async (req, res) => {
 
 // Which reading feeds each power-flow node, and the display names of the grid and generator
 // (e.g. "Kadisha", "Eshtirak"). Missing roles fall back to auto-detection in the UI.
-const FLOW_ROLES = ['solar', 'load', 'grid', 'generator', 'battery', 'soc', 'gridVoltage', 'generatorVoltage', 'loadVoltage'];
+const FLOW_ROLES = ['solar', 'load', 'grid', 'generator', 'battery', 'soc', 'gridVoltage', 'generatorVoltage', 'loadVoltage', 'batteryVoltage'];
 const NAMED_SOURCES = ['grid', 'generator'];
 router.put('/flowmap/:stationId', auth.requireAdmin, async (req, res) => {
   const stationId = String(req.params.stationId);
@@ -304,6 +311,11 @@ router.put('/flowmap/:stationId', auth.requireAdmin, async (req, res) => {
     if (n) names[role] = n;
   }
   if (Object.keys(names).length) map.names = names;
+  // Battery reserve (%) set by hand, overriding the one read from the inverter's settings.
+  const reserve = Number(req.body && req.body.reserve);
+  if (req.body && req.body.reserve !== '' && req.body.reserve !== null && Number.isFinite(reserve) && reserve >= 0 && reserve <= 100) {
+    map.reserve = Math.round(reserve);
+  }
   await settings.set({ [`flow_map:${stationId}`]: JSON.stringify(map) });
   res.json({ map });
 });

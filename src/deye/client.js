@@ -188,6 +188,19 @@ class DeyeClient {
     return this.call('/device/measurePoints', { deviceSn });
   }
 
+  // Read-only views of the inverter's settings (the app never writes settings).
+  configBattery(deviceSn) {
+    return this.call('/config/battery', { deviceSn });
+  }
+
+  configSystem(deviceSn) {
+    return this.call('/config/system', { deviceSn });
+  }
+
+  configTou(deviceSn) {
+    return this.call('/config/tou', { deviceSn });
+  }
+
   deviceHistory(deviceSn, granularity, startAt, endAt, measurePoints) {
     const body = { deviceSn, granularity, startAt };
     if (endAt) body.endAt = endAt;
