@@ -53,8 +53,8 @@ const ERRORS = {
   407: 'this App ID is not allowed to do that',
   412: 'this App ID has used up its monthly eWeLink API calls',
   500: 'eWeLink server error',
-  4002: 'the device did not accept the command (offline or unsupported)',
-  30022: 'the device is offline',
+  4002: "the device didn't confirm the command (offline, weak Wi-Fi, or a command it doesn't support)",
+  30022: 'the device is offline or did not answer',
 };
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

@@ -117,7 +117,8 @@ async function mountList(root, ctx) {
   function card(d) {
     const off = d.online === false;
     const chs = d.channels;
-    const dis = !canControl || off || busy.has(d.id);
+    // eWeLink's online flag lags for devices on weak Wi-Fi, so offline devices can still be tried.
+    const dis = !canControl || busy.has(d.id);
     let controls = '';
     if (chs.length === 1) {
       const on = chs[0].state === 'on';
@@ -138,7 +139,7 @@ async function mountList(root, ctx) {
         <span class="dot ${off ? 'err' : d.online ? 'ok' : ''}" title="${off ? 'Offline' : d.online ? 'Online' : 'Unknown'}"></span>
       </div>
       ${readings.length ? `<div class="sc-readings">${readings.map((r) => `<span><b>${esc(val(r))}</b> <small>${esc(r.label.toLowerCase())}</small></span>`).join('')}</div>` : ''}
-      ${off ? `<div class="small faint">Offline${d.updatedTs ? ` · last seen ${esc(fmtAgo(d.updatedTs))}` : ''}</div>` : ''}
+      ${off ? `<div class="small faint" title="Commands are still sent; they get through if the device is only briefly out of reach.">eWeLink says offline${d.updatedTs ? ` · last heard from ${esc(fmtAgo(d.updatedTs))}` : ''}</div>` : ''}
       ${controls ? `<div class="sc-controls">${controls}</div>` : ''}
     </div>`;
   }
@@ -156,6 +157,7 @@ async function mountList(root, ctx) {
       const i = data.devices.findIndex((x) => x.id === devId);
       if (i >= 0) data.devices[i] = r.device;
       if (!r.ok) toast(`${r.device.name}: ${r.message}`, 'err');
+      else if (r.note) toast(`${r.device.name}: ${r.note}`);
       renderActivity().catch(() => {});
     } catch (err) {
       toast(err.message, 'err');
@@ -226,7 +228,7 @@ function activityTable(actions, withDevice) {
         ${withDevice ? `<td><a href="#/smart?id=${encodeURIComponent(a.deviceId)}">${esc(a.device)}</a></td>` : ''}
         <td>${esc(a.summary)}</td>
         <td class="small">${a.automation ? `${icon('zap', 'style="width:12px;height:12px;vertical-align:-1px"')} <a href="#/automations">${esc(a.automation)}</a>` : esc(a.user || a.source)}</td>
-        <td>${a.status === 'ok' ? '<span class="badge ok">Done</span>' : `<span class="badge err" title="${esc(a.message || '')}">Failed</span> <span class="small faint">${esc(a.message || '')}</span>`}</td></tr>`
+        <td>${a.status === 'ok' ? '<span class="badge ok">Done</span>' : `<span class="badge err" title="${esc(a.message || '')}">Failed</span>`} <span class="small faint">${esc(a.message || '')}</span></td></tr>`
       )
       .join('')}</tbody></table></div>`;
 }
@@ -301,7 +303,7 @@ async function mountDevice(root, ctx, id) {
   }
 
   function renderControls() {
-    const dis = !canControl || d.online === false || st.busy;
+    const dis = !canControl || st.busy;
     const c = d.controls;
     const parts = [];
     if (d.channels.length) {
@@ -338,7 +340,7 @@ async function mountDevice(root, ctx, id) {
         <div class="row" style="margin-top:8px"><button class="btn sm" id="send-raw" ${dis ? 'disabled' : ''}>Send</button></div></details>`);
     }
     if (!canControl) parts.push('<p class="small faint">Only admins can control devices.</p>');
-    else if (d.online === false) parts.push('<p class="small faint">The device is offline; commands would fail.</p>');
+    else if (d.online === false) parts.push('<p class="small faint">eWeLink says this device is offline. Commands are still sent and get through if it is only briefly out of reach (weak Wi-Fi); each one is checked.</p>');
     $('#controls', root).innerHTML = parts.join('') || '<p class="small faint">This device has nothing to control.</p>';
   }
 
@@ -361,6 +363,7 @@ async function mountDevice(root, ctx, id) {
       const r = await api.post(url, body);
       if (r.device) d = { ...d, ...r.device };
       if (r.ok === false) toast(r.message, 'err');
+      else if (r.note) toast(r.note);
       else if (r.summary) toast(r.summary, 'ok');
       renderAll();
       loadHistory().catch(() => {});
@@ -509,7 +512,7 @@ async function mountDevice(root, ctx, id) {
           ts: a.ts,
           kind: 'cmd',
           html: `${icon(a.automation ? 'zap' : 'user', 'style="width:13px;height:13px;vertical-align:-2px"')} Sent “${esc(a.summary)}” ${a.automation ? `by automation <a href="#/automations">${esc(a.automation)}</a>` : `by ${esc(a.user || a.source)}`}
-            ${a.status === 'ok' ? '' : `<span class="badge err">Failed</span> <span class="small faint">${esc(a.message || '')}</span>`}`,
+            ${a.status === 'ok' ? '' : '<span class="badge err">Failed</span>'} ${a.message ? `<span class="small faint">${esc(a.message)}</span>` : ''}`,
         }))
       )
       .sort((a, b) => b.ts - a.ts)

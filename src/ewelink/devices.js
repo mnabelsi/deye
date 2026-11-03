@@ -40,7 +40,7 @@ const KIND_LABELS = { light: 'Light', fan: 'Fan', thermostat: 'Thermostat', sens
 function channelMode(uiid, params = {}) {
   if (DOOR_SWITCH.has(uiid) || SENSORS.has(uiid)) return { mode: 'none', count: 0 };
   if (MULTI[uiid]) return { mode: 'multi', count: MULTI[uiid] };
-  if (typeof params.switch === 'string') return { mode: 'single', count: 1 };
+  if (typeof params.switch === 'string' || typeof params.switch === 'boolean') return { mode: 'single', count: 1 };
   // "Multi-channel protocol" single relays (UIID 77, 78, 138, 160, 182, 190...) use switches[0].
   if (Array.isArray(params.switches) && params.switches.length) return { mode: 'multi', count: 1 };
   return { mode: 'none', count: 0 };
@@ -57,7 +57,10 @@ function channels(dev) {
   const p = dev.params || {};
   const { mode, count } = channelMode(dev.uiid, p);
   const names = channelNames(dev.raw);
-  if (mode === 'single') return [{ index: 0, name: names['0'] || (dev.uiid === 34 ? 'Light' : 'Power'), state: p.switch === 'on' ? 'on' : p.switch === 'off' ? 'off' : null }];
+  if (mode === 'single') {
+    const state = p.switch === 'on' || p.switch === true ? 'on' : p.switch === 'off' || p.switch === false ? 'off' : null;
+    return [{ index: 0, name: names['0'] || (dev.uiid === 34 ? 'Light' : 'Power'), state }];
+  }
   if (mode !== 'multi') return [];
   const list = Array.isArray(p.switches) ? p.switches : [];
   const out = [];
@@ -72,7 +75,8 @@ function channels(dev) {
 /** Params that set one channel (or every channel when channel is null) to 'on' or 'off'. */
 function switchParams(dev, channel, state) {
   const { mode, count } = channelMode(dev.uiid, dev.params || {});
-  if (mode === 'single') return { switch: state };
+  // UIID 226 (circuit breaker) takes true/false instead of "on"/"off".
+  if (mode === 'single') return { switch: typeof (dev.params || {}).switch === 'boolean' ? state === 'on' : state };
   if (mode === 'multi') {
     const outlets = channel === null || channel === undefined ? [...Array(count).keys()] : [Number(channel)];
     return { switches: outlets.filter((o) => o >= 0 && o < count).map((outlet) => ({ switch: state, outlet })) };
@@ -273,7 +277,10 @@ function channelKey(dev, index) {
 function summarize(dev, params) {
   const parts = [];
   const chs = channels(dev);
-  if (params.switch) parts.push(`${chs.length === 1 && chs[0].name !== 'Power' ? `${chs[0].name} ` : ''}${params.switch}`);
+  if (params.switch !== undefined && typeof params.switch !== 'object') {
+    const word = params.switch === true ? 'on' : params.switch === false ? 'off' : params.switch;
+    parts.push(`${chs.length === 1 && chs[0].name !== 'Power' ? `${chs[0].name} ` : ''}${word}`);
+  }
   if (Array.isArray(params.switches)) {
     if (params.switches.length === chs.length && chs.length > 1 && params.switches.every((s) => s.switch === params.switches[0].switch)) {
       parts.push(`all channels ${params.switches[0].switch}`);
