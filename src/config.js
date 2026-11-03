@@ -63,6 +63,12 @@ module.exports = {
     password: process.env.DEYE_PASSWORD || '',
     companyId: process.env.DEYE_COMPANY_ID || '',
   },
+  // Optional eWeLink defaults; values saved from the Settings page take precedence.
+  ewelink: {
+    appId: process.env.EWELINK_APP_ID || '',
+    appSecret: process.env.EWELINK_APP_SECRET || '',
+    server: process.env.EWELINK_SERVER || '',
+  },
   defaultAdmin: {
     username: 'admin',
     password: '123456',

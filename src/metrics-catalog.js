@@ -54,6 +54,7 @@ const CATEGORY_RULES = [
 ];
 
 function categorize(key, unit, sourceType) {
+  if (sourceType === 'ewelink') return 'Smart devices';
   if (sourceType === 'station') {
     if (GEN.test(key)) return 'Generator';
     if (/generation|irradia/i.test(key)) return 'Solar';

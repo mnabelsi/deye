@@ -41,6 +41,20 @@ Built with plain **Node.js + Express** (no build step) so it deploys as-is on **
   charge/discharge and grid-charge currents, grid/generator charging, and time of use (days and the six
   slots). Each change is confirmed first, sent one at a time, followed until the inverter confirms it, and
   kept in a change log.
+- **Smart devices (eWeLink)** – connect your eWeLink account (Sonoff and other eWeLink devices) and control
+  devices like in the eWeLink app: switch single and multi-channel relays, dim lights, set the power-on state,
+  inching and the indicator light, or send any other setting. Each device has its readings (power, voltage,
+  current, energy, temperature, humidity, door, motion, battery…), a timeline of when each channel was on and
+  for how long, charts, a log of who switched it (a person, an automation, or something outside such as the
+  eWeLink app or a wall switch), eWeLink's own operation log, and, for POW plugs, their last 100 days of energy.
+  Device readings also appear in **Charts** next to the inverter's. See [Smart devices](#smart-devices-ewelink).
+- **Automations** – rules such as *when the grid is on, turn the heater on (and off when it goes)* or *between
+  00:00 and 05:00, if the battery is under 30%, turn off all the lights*. Conditions: grid or generator on/off,
+  battery level, solar, home load, grid import/export, spare solar, battery charging or discharging, any inverter
+  reading, time of day and days, smart devices' state and readings. Rules can wait until their conditions have held
+  for a while, run "otherwise" actions when they stop holding, and keep devices in place if someone switches them
+  by hand. The editor shows what each condition sees right now, and every run is logged with the reason.
+  See [How automations work](#how-automations-work).
 - **Complete history** – polls DeyeCloud every few minutes, **imports past history** from DeyeCloud
   day by day, and **fills gaps automatically** if the app was asleep.
 - **Accounts** – login with default **`admin` / `123456`** (change it on first login), extra users (admin or viewer).
@@ -71,6 +85,19 @@ In Settings choose **Data center → Custom URL…** `http://localhost:4100/v1.0
 App Secret `demo`, email `demo@example.com`, password `demo`. Then import some history (a year for Battery insights).
 The mock models a 6.6 kWp zero-export system with a 10.24 kWh battery, a grid with daily outages and a 10 A
 generator on the GEN port, so the battery-sizing results can be checked against known values.
+
+### Try smart devices and automations without devices
+
+A mock eWeLink server with simulated devices (a water heater with power metering, multi-channel light switches,
+a lamp, a thermostat, sensors, an offline and a shared device) is included:
+
+```bash
+npm run mock:ewelink   # starts http://localhost:4200
+```
+
+In Settings → **Smart devices (eWeLink)** enter App ID `demo`, App Secret `demo`, choose **Server → Custom URL**
+`http://localhost:4200`, save, then press **Connect eWeLink account** and sign in on the mock page. With the
+DeyeCloud mock running as well, automations can be tried against its grid, generator and battery.
 
 ## Deploying on Hostinger
 
@@ -131,6 +158,10 @@ wget -q -O /dev/null "https://your-domain.com/api/cron/collect?key=YOUR_KEY"
 
 The cron call and the built-in scheduler share a database lock, so they never run twice at once.
 
+### 5. Smart devices (optional)
+
+See [Smart devices (eWeLink)](#smart-devices-ewelink) below.
+
 ### Updating
 
 Push to the connected branch (or upload a new zip) and redeploy from hPanel. Your data and settings live in
@@ -150,6 +181,7 @@ settings are required; everything else is managed on the Settings page.
 | `CRON_KEY` | auto | Key for `/api/cron/collect`; generated if empty |
 | `DISABLE_SCHEDULER` | `0` | `1` = collect only via cron / CLI |
 | `DEYE_*` | – | Optional DeyeCloud defaults (`DEYE_BASE_URL`, `DEYE_APP_ID`, `DEYE_APP_SECRET`, `DEYE_EMAIL`, `DEYE_PASSWORD`, …) |
+| `EWELINK_APP_ID`, `EWELINK_APP_SECRET` | – | Optional eWeLink app credentials (normally entered on the Settings page) |
 
 Command-line helpers (e.g. over SSH):
 
@@ -158,10 +190,70 @@ npm run collect                              # one collection now (add -- --forc
 node scripts/backfill.js 2025-01-01 2025-06-30   # import a date range and wait until it is finished
 ```
 
+## Smart devices (eWeLink)
+
+The dashboard talks to eWeLink's cloud through its official Open API (v2), the same service the eWeLink app uses.
+
+1. Sign in to the [eWeLink developer center](https://dev.ewelink.cc) with your developer account and create an app
+   (OAuth 2.0). As its **redirect URL**, enter the address shown in Settings → *Smart devices (eWeLink)*, which is
+   `https://your-domain.com/api/ewelink/callback`. It must match exactly, including `https`.
+2. In Settings → *Smart devices (eWeLink)*, enter the app's **App ID** and **App Secret** and press **Save**.
+3. Press **Connect eWeLink account**. eWeLink's own sign-in page opens; sign in with the eWeLink account your
+   devices are in (not necessarily the developer account) and allow access. You come back to Settings and the
+   devices are loaded. Your eWeLink password never passes through the dashboard.
+
+Then open **Smart devices** to control them and see their history, and **Automations** to create rules.
+
+**Limits of a free eWeLink App ID**, and how the dashboard stays inside them:
+
+- **50,000 API calls a month per region**, at least 500 ms apart. Settings shows the calls used this month. If
+  eWeLink reports the quota used up, calls pause until the next month (the devices keep their own schedules).
+- To save calls, device changes arrive over eWeLink's **live connection** (a WebSocket, as in the eWeLink app),
+  which costs no API calls. While it is up the full device list is re-read only every 30 minutes; while it is down
+  (or with `DISABLE_SCHEDULER=1`, where only the cron job runs) every 5 minutes (configurable). Switching a device
+  costs one call; automations switch up to 10 devices per call. A month of normal use is a few thousand calls.
+- Free App IDs see **Sonoff and other authorised brands** only. If eWeLink lists more devices than you see, the
+  others are brands eWeLink doesn't open to free App IDs.
+- Power-metering plugs (POW, S40…) report power only while an app "has their page open". With
+  *Keep power-metering plugs reporting* on, the dashboard asks them every minute over the live connection, so their
+  power history is continuous.
+- eWeLink's own operation log may not be open to every App ID; the history the dashboard records itself is always
+  available.
+
+The access token is renewed automatically; the sign-in lasts 60 days from the last renewal, so it only needs
+reconnecting if the app is stopped for that long.
+
+## How automations work
+
+Automations are checked **every minute** (by the built-in scheduler and by the cron job), right after the
+inverter data is collected. Each rule has conditions (all or any of them), actions, and optional "otherwise"
+actions:
+
+- Actions run **once when the conditions start holding**, and the "otherwise" actions once when they stop, like
+  scenes in the eWeLink app. A rule without "otherwise" actions does nothing when its conditions stop holding.
+  A new or changed rule acts on the conditions as they are when it is saved.
+- **Wait N minutes before acting** ignores short blips (e.g. the grid flickering); "otherwise" actions are not
+  delayed, so loads go off as soon as the condition ends.
+- **Keep devices this way** switches devices back (at most every 5 minutes) if someone changes them by hand
+  while the rule holds.
+- "Grid on" and "generator on" mean exactly what the Overview shows: power is flowing through the source, or its
+  voltage (or frequency) reading says it has power. Pick the voltage readings in Overview → Customize if needed.
+  Battery level, solar, home load and the other powers use the readings chosen there too.
+- Times are in the station's time zone. A window past midnight (22:00–06:00) works as expected, and its days are
+  the days it starts on.
+- DeyeCloud updates inverter readings every few minutes, so a change in the grid can take that long (plus the
+  poll interval) to be seen. **While the inverter data is older than 20 minutes** (or three poll intervals), rules
+  with inverter conditions wait rather than act on old values.
+- Every command is logged with its result. If none of a rule's devices could be switched (offline, eWeLink
+  unreachable), the rule tries again after 5 minutes; with *Keep devices this way*, any device that didn't
+  switch is retried as well.
+- **Pause all** on the Automations page stops every rule at once.
+
 ## How it works
 
 ```
 DeyeCloud OpenAPI ──► collector (every N min + history queue) ──► MySQL ──► REST API ──► dashboard (ECharts)
+eWeLink Open API + live WebSocket ──► smart devices ───────────────┘   automations (every minute) ──► eWeLink
 ```
 
 DeyeCloud endpoints used: `/account/token`, `/station/list`, `/station/device`, `/station/latest`,
@@ -176,6 +268,10 @@ Settings are changed **only** when an admin confirms a change on the Inverter se
 carries on sending changes an admin already queued. Battery type and raw Modbus commands are deliberately
 not offered.
 
+eWeLink endpoints used: `/v2/user/oauth/token`, `/v2/user/refresh`, `/v2/family`, `/v2/device/thing`,
+`/v2/device/thing/status`, `/v2/device/thing/batch-status`, `/v2/device/history`, the dispatch service and the
+live WebSocket (`userOnline`, `update`, `sysmsg`).
+
 ### Database tables
 
 | Table | Contents |
@@ -188,6 +284,9 @@ not offered.
 | `backfill_queue` | Resumable history-import jobs |
 | `collector_runs` | Collector log (kept 30 days) |
 | `inverter_commands` | Inverter setting changes: who, old → new value, DeyeCloud order and outcome |
+| `ewelink_devices` | Smart devices from eWeLink with their last known state; their readings and on/off changes are stored in `metrics` / `readings` / `text_readings` (source type `ewelink`) |
+| `ewelink_actions` | Every command sent to a smart device: by whom (person or automation) and the result (kept a year) |
+| `automations`, `automation_runs` | Automation rules with their state, and what each did and why (kept 180 days) |
 | `users`, `settings` | Accounts, preferences and configuration |
 
 **Storage estimate:** a hybrid inverter reports roughly 60–150 numeric readings. At 5-minute polling that is
@@ -218,6 +317,8 @@ page). The model is plain JavaScript in `public/js/insights-model.js` and runs i
 
 ## Security notes
 
+- Only admin accounts can control smart devices, connect eWeLink and create automations; viewers see devices,
+  history and automations read-only. The eWeLink App Secret and tokens are never sent to the browser.
 - Only admin accounts can change inverter settings; viewers see them read-only. Every change is validated
   on the server against safe ranges, confirmed in a dialog listing old → new values, and logged with the user.
 - Change the default `admin` / `123456` password straight away. The dashboard reminds you until you do.
@@ -233,6 +334,10 @@ page). The model is plain JavaScript in `public/js/insights-model.js` and runs i
 - **DeyeCloud sign-in failed**: check the data center (eu1 vs us1), App ID/Secret, and that the account
   has been granted to your developer app. Business accounts may need the Company ID.
 - **No new data**: see Settings → *Collector activity* for errors, and make sure the cron job is set.
+- **eWeLink: "redirect" or sign-in errors**: the redirect URL in the eWeLink developer center must be exactly the
+  one shown in Settings. If your site is reached through another address, enter that address there and in Settings.
+- **Automations don't act**: open the rule's *Check now* to see each condition. "?" means a value is unknown
+  (stale inverter data, no voltage reading for grid/generator, device state not reported yet).
 - **Gaps in charts**: the logger was offline or the app was asleep. Auto gap-fill re-imports missed
   days, or use *Import history* for a range.
 

@@ -34,6 +34,9 @@ function createApp() {
   // Called by a hosting cron job; authenticated with a secret key, not a session.
   app.use('/api/cron', require('./routes/cron'));
 
+  // eWeLink's redirect after sign-in: a page navigation, so it answers with a redirect, not JSON.
+  app.get('/api/ewelink/callback', require('./routes/ewelink').callback);
+
   app.use('/api', auth.requireAjaxHeader);
   app.use('/api/auth', require('./routes/auth'));
   app.use('/api', auth.requireAuth);
@@ -41,6 +44,8 @@ function createApp() {
   app.use('/api/settings', require('./routes/settings'));
   app.use('/api/collector', require('./routes/collector'));
   app.use('/api/inverter', require('./routes/inverter'));
+  app.use('/api/ewelink', require('./routes/ewelink').router);
+  app.use('/api/automations', require('./routes/automations'));
   app.use('/api', require('./routes/data'));
 
   app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));

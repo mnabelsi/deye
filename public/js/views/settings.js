@@ -1,5 +1,6 @@
 import { api } from '../api.js';
 import { $, esc, icon, toast, modal, confirmDialog, fmtTime, fmtAgo, localDateStr } from '../util.js';
+import { mountEwelinkSettings } from './ewelink-settings.js';
 
 const REGIONS = [
   ['https://eu1-developer.deyecloud.com/v1.0', 'Europe / Asia / Africa (eu1)'],
@@ -52,6 +53,8 @@ export async function mount(root, ctx) {
           </div>
         </form>
       </div>
+
+      <div class="card" id="ewelink-card"></div>
 
       <div class="grid cols-2">
         <div class="card">
@@ -401,7 +404,17 @@ export async function mount(root, ctx) {
 
   settings = await api.get('/api/settings');
   fillDeye();
-  await Promise.all([loadStatus(), loadUsers()]);
+  let stopEwelink = null;
+  await Promise.all([
+    loadStatus(),
+    loadUsers(),
+    mountEwelinkSettings($('#ewelink-card', root), ctx)
+      .then((stop) => (stopEwelink = stop))
+      .catch((err) => ($('#ewelink-card', root).innerHTML = `<div class="alert err">${icon('warn')}<div class="grow">${esc(err.message)}</div></div>`)),
+  ]);
   timer = setInterval(() => loadStatus().catch(() => {}), 15000);
-  return () => clearInterval(timer);
+  return () => {
+    clearInterval(timer);
+    if (stopEwelink) stopEwelink();
+  };
 }

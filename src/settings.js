@@ -27,6 +27,13 @@ const DEFAULTS = {
   auto_gap_fill: '1',
   retention_days: '0',
   backfill_per_tick: '6',
+  ewelink_app_id: '',
+  ewelink_app_secret: '',
+  ewelink_server: '',
+  ewelink_poll_minutes: '5',
+  ewelink_live: '1',
+  ewelink_power_reports: '1',
+  automations_enabled: '1',
 };
 
 async function loadAll(force) {
@@ -90,6 +97,27 @@ async function getDeyeConfig() {
   };
 }
 
+// eWeLink app credentials (Settings page wins over environment variables) and the account's tokens.
+// server is empty for eWeLink's real servers, or a custom base URL (e.g. the mock server).
+async function getEwelinkConfig() {
+  const s = await loadAll();
+  const env = config.ewelink;
+  return {
+    appId: s.ewelink_app_id || env.appId,
+    appSecret: s.ewelink_app_secret || env.appSecret,
+    server: (s.ewelink_server || env.server || '').replace(/\/+$/, ''),
+    region: s.ewelink_region || '',
+    at: s.ewelink_at || '',
+    rt: s.ewelink_rt || '',
+    atExpires: Number(s.ewelink_at_expires || 0),
+    rtExpires: Number(s.ewelink_rt_expires || 0),
+    apikey: s.ewelink_apikey || '',
+  };
+}
+
+const isEwelinkConfigured = (c) => Boolean(c.appId && c.appSecret);
+const isEwelinkConnected = (c) => Boolean(isEwelinkConfigured(c) && c.rt && c.region);
+
 function isDeyeConfigured(c) {
   const login = c.loginType === 'username' ? c.username : c.loginType === 'mobile' ? c.mobile : c.email;
   return Boolean(c.baseUrl && c.appId && c.appSecret && login && c.passwordSha256);
@@ -103,6 +131,9 @@ module.exports = {
   getOrCreateSecret,
   getDeyeConfig,
   isDeyeConfigured,
+  getEwelinkConfig,
+  isEwelinkConfigured,
+  isEwelinkConnected,
   sha256,
   invalidate: () => { cache = null; },
 };
