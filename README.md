@@ -336,6 +336,11 @@ page). The model is plain JavaScript in `public/js/insights-model.js` and runs i
 - **No new data**: see Settings → *Collector activity* for errors, and make sure the cron job is set.
 - **eWeLink: "redirect" or sign-in errors**: the redirect URL in the eWeLink developer center must be exactly the
   one shown in Settings. If your site is reached through another address, enter that address there and in Settings.
+- **Smart device command "Failed: the device didn't confirm the command"**: eWeLink only waits a moment for
+  a device to confirm. Devices on weak Wi-Fi often switch anyway, so after such an answer the dashboard reads the
+  device back (up to twice, one API call each) and logs the command as done, with a note, if it did switch. A
+  device eWeLink lists as offline can still be switched from the dashboard for the same reason. Commands that
+  really fail usually mean the device is out of reach; moving it closer to the router helps.
 - **Automations don't act**: open the rule's *Check now* to see each condition. "?" means a value is unknown
   (stale inverter data, no voltage reading for grid/generator, device state not reported yet).
 - **Gaps in charts**: the logger was offline or the app was asleep. Auto gap-fill re-imports missed

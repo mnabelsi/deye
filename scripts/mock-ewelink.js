@@ -40,6 +40,7 @@ function dev(id, name, uiid, model, room, params, extra = {}) {
   return {
     itemType: extra.itemType || 1,
     online: extra.online !== false,
+    flaky: Boolean(extra.flaky),
     data: {
       name,
       deviceid: id,
@@ -79,6 +80,10 @@ const devices = [
     switches: [{ switch: 'off', outlet: 0 }], configure: [{ startup: 'off', outlet: 0 }], pulses: [{ pulse: 'off', width: 1000, outlet: 0 }], power: 0, voltage: 23010, current: 0, dayKwh: 142, monthKwh: 4120,
   }),
   dev('10000a000a', 'Outdoor temperature', 1770, 'SNZB-02', 'room-outside', { temperature: '2558', humidity: '5211', battery: 96, trigTime: String(Date.now()) }),
+  // Weak Wi-Fi: eWeLink lists it offline and answers commands with 4002, yet it switches.
+  dev('10000a000b', 'Workshop switch (weak Wi-Fi)', 4, '4CHR3', 'room-outside', {
+    switches: [0, 1, 2, 3].map((outlet) => ({ switch: outlet === 0 ? 'on' : 'off', outlet })),
+  }, { online: false, flaky: true }),
 ];
 const byId = new Map(devices.map((d) => [d.data.deviceid, d]));
 const history = new Map(devices.map((d) => [d.data.deviceid, []]));
@@ -127,6 +132,10 @@ function merge(cur, upd) {
 function control(id, params, by) {
   const d = byId.get(id);
   if (!d) return 405;
+  if (d.flaky && params.uiActive === undefined) {
+    merge(d.data.params, params);
+    return 4002; // switched, but its answer came too late
+  }
   if (!d.online) return 4002;
   if (params.uiActive !== undefined) {
     uiActiveUntil.set(id, Date.now() + Number(params.uiActive || 60) * 1000);

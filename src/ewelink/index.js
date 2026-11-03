@@ -110,6 +110,46 @@ async function loadFamily(c) {
   return rooms;
 }
 
+/**
+ * Stores one device as eWeLink lists it ({ itemType, itemData }): name, room, online flag, state and
+ * readings. updated_ts moves only when its state or online flag changed, so it tells when the
+ * device was last heard from rather than when it was last synced.
+ */
+async function storeThing(t, rooms, now, sortIndex) {
+  const d = t.itemData || {};
+  if (!d.deviceid) return false;
+  const extra = d.extra || {};
+  const roomId = (d.family && d.family.roomid) || null;
+  const dev = {
+    deviceid: String(d.deviceid),
+    name: d.name || null,
+    uiid: Number(extra.uiid) || null,
+    model: d.productModel || extra.model || null,
+    brand: d.brandName || extra.manufacturer || null,
+    item_type: t.itemType,
+    apikey: d.apikey || null,
+    family_id: (d.family && d.family.familyid) || null,
+    room_id: roomId,
+    room_name: roomId ? rooms[roomId] || null : null,
+    online: d.online === undefined ? null : Boolean(d.online),
+    params: d.params || {},
+    raw: { extra, tags: d.tags || {}, settings: d.settings || {}, devConfig: d.devConfig ? '…' : undefined, sharedBy: d.sharedBy ? { nickname: d.sharedBy.nickname, email: d.sharedBy.email } : undefined },
+  };
+  // MySQL applies these assignments in order: updated_ts must compare before params and online change.
+  await db.query(
+    `INSERT INTO ewelink_devices (deviceid, name, uiid, model, brand, item_type, apikey, family_id, room_id, room_name, online, params, raw, sort_index, seen_ts, updated_ts)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE updated_ts = IF(params <=> VALUES(params) AND online <=> VALUES(online), updated_ts, VALUES(updated_ts)),
+       name = VALUES(name), uiid = VALUES(uiid), model = VALUES(model), brand = VALUES(brand), item_type = VALUES(item_type),
+       apikey = VALUES(apikey), family_id = VALUES(family_id), room_id = VALUES(room_id), room_name = VALUES(room_name), online = VALUES(online),
+       params = VALUES(params), raw = VALUES(raw), sort_index = VALUES(sort_index), seen_ts = VALUES(seen_ts)`,
+    [dev.deviceid, dev.name, dev.uiid, dev.model, dev.brand, dev.item_type, dev.apikey, dev.family_id, dev.room_id, dev.room_name,
+      dev.online === null ? null : dev.online ? 1 : 0, JSON.stringify(dev.params), JSON.stringify(dev.raw), sortIndex, now, now]
+  );
+  await storeSamples('ewelink', dev.deviceid, devices.samples(dev, now));
+  return true;
+}
+
 /** Fetches every device from eWeLink and stores their names, states and readings. */
 async function sync(c, { family = false } = {}) {
   const started = Date.now();
@@ -124,36 +164,7 @@ async function sync(c, { family = false } = {}) {
   const groups = res.thingList.filter((t) => t.itemType === 3).length;
   for (const t of res.thingList) {
     if (t.itemType !== 1 && t.itemType !== 2) continue; // 3 = groups
-    const d = t.itemData || {};
-    if (!d.deviceid) continue;
-    const extra = d.extra || {};
-    const roomId = (d.family && d.family.roomid) || null;
-    const dev = {
-      deviceid: String(d.deviceid),
-      name: d.name || null,
-      uiid: Number(extra.uiid) || null,
-      model: d.productModel || extra.model || null,
-      brand: d.brandName || extra.manufacturer || null,
-      item_type: t.itemType,
-      apikey: d.apikey || null,
-      family_id: (d.family && d.family.familyid) || null,
-      room_id: roomId,
-      room_name: roomId ? rooms[roomId] || null : null,
-      online: d.online === undefined ? null : Boolean(d.online),
-      params: d.params || {},
-      raw: { extra, tags: d.tags || {}, settings: d.settings || {}, devConfig: d.devConfig ? '…' : undefined, sharedBy: d.sharedBy ? { nickname: d.sharedBy.nickname, email: d.sharedBy.email } : undefined },
-    };
-    await db.query(
-      `INSERT INTO ewelink_devices (deviceid, name, uiid, model, brand, item_type, apikey, family_id, room_id, room_name, online, params, raw, sort_index, seen_ts, updated_ts)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE name = VALUES(name), uiid = VALUES(uiid), model = VALUES(model), brand = VALUES(brand), item_type = VALUES(item_type),
-         apikey = VALUES(apikey), family_id = VALUES(family_id), room_id = VALUES(room_id), room_name = VALUES(room_name), online = VALUES(online),
-         params = VALUES(params), raw = VALUES(raw), sort_index = VALUES(sort_index), seen_ts = VALUES(seen_ts), updated_ts = VALUES(updated_ts)`,
-      [dev.deviceid, dev.name, dev.uiid, dev.model, dev.brand, dev.item_type, dev.apikey, dev.family_id, dev.room_id, dev.room_name,
-        dev.online === null ? null : dev.online ? 1 : 0, JSON.stringify(dev.params), JSON.stringify(dev.raw), Number(t.index) || 0, now, now]
-    );
-    await storeSamples('ewelink', dev.deviceid, devices.samples(dev, now));
-    count += 1;
+    if (await storeThing(t, rooms, now, Number(t.index) || 0)) count += 1;
   }
   // Devices removed from the eWeLink account disappear after a week (their history stays).
   await db.query('DELETE FROM ewelink_devices WHERE seen_ts < ?', [now - 7 * 86400]);
@@ -210,6 +221,58 @@ async function setOnline(deviceid, online, ts = nowSec()) {
 
 // ---------- commands ----------
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Whether a device's params show what a command asked for (switch states, brightness…). */
+function reached(cur, wanted) {
+  let compared = 0;
+  for (const [k, v] of Object.entries(wanted || {})) {
+    if (ASK_KEYS.has(k)) continue;
+    compared += 1;
+    if (k === 'switches' && Array.isArray(v)) {
+      const list = Array.isArray(cur.switches) ? cur.switches : [];
+      if (!v.every((x) => list.some((y) => Number(y.outlet) === Number(x.outlet) && y.switch === x.switch))) return false;
+    } else if (v && typeof v === 'object' && !Array.isArray(v)) {
+      const c = cur[k] || {};
+      if (!Object.entries(v).every(([kk, vv]) => JSON.stringify(c[kk]) === JSON.stringify(vv))) return false;
+    } else if (JSON.stringify(cur[k]) !== JSON.stringify(v)) return false;
+  }
+  return compared > 0;
+}
+
+/**
+ * eWeLink answers a command with an error when the device doesn't confirm it quickly, yet a device
+ * on weak Wi-Fi often gets it and switches anyway. After a reported failure, read the devices back
+ * (one call for up to 10, twice at most) and store what they now report. Resolves the set of
+ * device ids whose state now matches the command.
+ */
+async function confirmReached(c, items) {
+  const done = new Set();
+  const rooms = parse(await settings.get('ewelink_rooms'), {});
+  for (const wait of [1500, 3000]) {
+    const pending = items.filter((x) => !done.has(x.dev.deviceid));
+    if (!pending.length) break;
+    await sleep(wait);
+    for (let i = 0; i < pending.length; i += 10) {
+      const batch = pending.slice(i, i + 10);
+      let res;
+      try {
+        res = await c.thingsById(batch.map((x) => ({ itemType: x.dev.item_type === 2 ? 2 : 1, id: x.dev.deviceid })));
+      } catch {
+        return done;
+      }
+      for (const t of res.thingList || []) {
+        const id = String((t.itemData || {}).deviceid || '');
+        const item = batch.find((x) => x.dev.deviceid === id);
+        if (!item) continue;
+        await storeThing(t, rooms, nowSec(), Number(item.dev.sort_index) || 0);
+        if (reached((t.itemData && t.itemData.params) || {}, item.params)) done.add(id);
+      }
+    }
+  }
+  return done;
+}
+
 async function logAction(dev, params, actor, status, message) {
   await db.query(
     `INSERT INTO ewelink_actions (deviceid, params, summary, source, user_id, username, automation_id, status, message, created_ts)
@@ -239,16 +302,25 @@ async function command(deviceid, params, actor, c) {
   if (!params || typeof params !== 'object' || Array.isArray(params) || !Object.keys(params).length) throw httpError(400, 'Nothing to send');
   let ok = true;
   let message = null;
+  let confirmed = false;
+  const cl = c || (await client());
   try {
-    await (c || (await client())).setStatus(dev.deviceid, params);
+    await cl.setStatus(dev.deviceid, params);
   } catch (err) {
     if (err.status && !(err instanceof EwelinkError)) throw err;
     ok = false;
     message = err.message;
+    // The command may still have reached the device: look before calling it a failure.
+    if (!err.quota && !err.auth && (await confirmReached(cl, [{ dev, params }])).has(dev.deviceid)) {
+      ok = true;
+      confirmed = true;
+      message = 'eWeLink got no confirmation from the device in time, but it did switch';
+    }
   }
   await logAction(dev, params, actor, ok ? 'ok' : 'failed', message);
-  const after = ok ? await applyParams(dev.deviceid, params) : dev;
-  return { ok, message, summary: devices.summarize(dev, params), device: devices.describe(after || dev) };
+  // A confirmed state was stored from the device's own report; a plain success is applied here.
+  const after = ok && !confirmed ? await applyParams(dev.deviceid, params) : await load(dev.deviceid);
+  return { ok, message: ok ? null : message, note: confirmed ? message : null, summary: devices.summarize(dev, params), device: devices.describe(after || dev) };
 }
 
 /**
@@ -282,14 +354,19 @@ async function commandMany(list, actor) {
         results = null; // batch not allowed for this App ID: send one by one
       }
     }
+    // Devices eWeLink says failed may still have switched (see confirmReached).
+    const failed = results ? batch.filter((b) => (results.get(b.dev.deviceid) || 0) !== 0) : [];
+    const reachedAnyway = failed.length ? await confirmReached(c, failed) : new Set();
     for (const b of batch) {
       if (results) {
         const code = results.has(b.dev.deviceid) ? results.get(b.dev.deviceid) : 0;
-        const ok = code === 0;
-        const message = ok ? null : code === 30022 || code === 504 ? 'the device is offline' : `eWeLink error ${code}`;
+        const confirmed = code !== 0 && reachedAnyway.has(b.dev.deviceid);
+        const ok = code === 0 || confirmed;
+        const reason = code === 30022 || code === 504 ? 'the device is offline or did not answer' : `eWeLink error ${code}`;
+        const message = code === 0 ? null : confirmed ? 'eWeLink got no confirmation from the device in time, but it did switch' : reason;
         await logAction(b.dev, b.params, actor, ok ? 'ok' : 'failed', message);
-        if (ok) await applyParams(b.dev.deviceid, b.params);
-        out.push({ deviceid: b.dev.deviceid, ok, message, summary: devices.summarize(b.dev, b.params) });
+        if (code === 0) await applyParams(b.dev.deviceid, b.params);
+        out.push({ deviceid: b.dev.deviceid, ok, message: ok ? null : message, summary: devices.summarize(b.dev, b.params) });
       } else {
         const r = await command(b.dev.deviceid, b.params, actor, c);
         out.push({ deviceid: b.dev.deviceid, ok: r.ok, message: r.message, summary: r.summary });
@@ -306,7 +383,7 @@ const cloudCache = new Map();
 // The channel states a command set, by metric key ({ switch_2: 'on' }), to tell who switched what.
 function switchStates(dev, params) {
   const out = {};
-  if (typeof params.switch === 'string') out[devices.channelKey(dev, 0)] = params.switch;
+  if (typeof params.switch === 'string' || typeof params.switch === 'boolean') out[devices.channelKey(dev, 0)] = params.switch === true ? 'on' : params.switch === false ? 'off' : params.switch;
   if (Array.isArray(params.switches)) for (const x of params.switches) out[devices.channelKey(dev, Number(x.outlet))] = x.switch;
   return out;
 }
