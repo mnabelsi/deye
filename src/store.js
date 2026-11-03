@@ -130,9 +130,10 @@ async function storeSamples(sourceType, sourceId, samples) {
     if (g.kind === 'number') {
       for (const p of g.points) numRows.push([id, p.ts, p.value]);
     } else {
-      // Only record text values when they change.
+      // Only record text values when they change. A sample at the same second as the last one
+      // (the same frame polled twice, a command and the device's echo) compares against it too.
       const ex = existing.get(g.key);
-      let prev = ex && ex.last_ts && g.points[0].ts > ex.last_ts ? ex.last_value_text : null;
+      let prev = ex && ex.last_ts && g.points[0].ts >= ex.last_ts ? ex.last_value_text : null;
       for (const p of g.points) {
         if (p.value !== prev) textRows.push([id, p.ts, p.value]);
         prev = p.value;

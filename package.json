@@ -9,6 +9,7 @@
     "collect": "node scripts/collect.js",
     "backfill": "node scripts/backfill.js",
     "mock": "node scripts/mock-deye.js",
+    "mock:ewelink": "node scripts/mock-ewelink.js",
     "check": "node --check server.js && node scripts/check-syntax.js"
   },
   "engines": {
@@ -20,7 +21,8 @@
     "dotenv": "^16.4.7",
     "echarts": "^5.6.0",
     "express": "^5.1.0",
-    "mysql2": "^3.14.0"
+    "mysql2": "^3.14.0",
+    "ws": "^8.18.3"
   },
   "license": "MIT"
 }

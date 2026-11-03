@@ -6,28 +6,12 @@ const auth = require('../auth');
 const settings = require('../settings');
 const catalog = require('../metrics-catalog');
 const { localDayFormatter } = require('../collector');
+const { liveStations, toMetric } = require('../live');
 
 const router = express.Router();
 
 const NICE_BUCKETS = [60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600, 43200, 86400, 604800];
 const MAX_POINTS = 2000;
-
-function toMetric(r) {
-  return {
-    id: r.id,
-    sourceType: r.source_type,
-    sourceId: r.source_id,
-    key: r.mkey,
-    label: catalog.label(r.mkey, r.name, r.source_type),
-    unit: r.unit || '',
-    kind: r.value_kind,
-    category: catalog.categorize(r.mkey, r.unit, r.source_type),
-    quantity: catalog.quantity(r.unit),
-    firstTs: r.first_ts,
-    lastTs: r.last_ts,
-    lastValue: r.value_kind === 'number' ? r.last_value_num : r.last_value_text,
-  };
-}
 
 function parseIds(value) {
   return String(value || '')
@@ -86,7 +70,8 @@ router.get('/sources', async (req, res) => {
     if (st) st.devices.push(dev);
     else orphans.push(dev);
   }
-  res.json({ stations: out, unassignedDevices: orphans });
+  const smart = await db.query('SELECT deviceid, name FROM ewelink_devices ORDER BY sort_index, name');
+  res.json({ stations: out, unassignedDevices: orphans, smartDevices: smart.map((d) => ({ id: d.deviceid, name: d.name || d.deviceid })) });
 });
 
 router.get('/metrics', async (req, res) => {
@@ -209,81 +194,7 @@ router.get('/events', async (req, res) => {
 
 // Latest snapshot per station for the overview page.
 router.get('/live', async (req, res) => {
-  const stations = await db.query('SELECT * FROM stations WHERE enabled = 1 ORDER BY name');
-  const metrics = await db.query(
-    "SELECT * FROM metrics WHERE source_type = 'station' OR source_id IN (SELECT sn FROM devices WHERE enabled = 1)"
-  );
-  const devices = await db.query('SELECT sn, station_id, device_type, connect_status, last_ts FROM devices WHERE enabled = 1');
-  const today = await db.query(
-    `SELECT station_id, mkey, value, day FROM daily_energy
-      WHERE day = (SELECT MAX(day) FROM daily_energy d2 WHERE d2.station_id = daily_energy.station_id)`
-  );
-  const all = await settings.loadAll();
-  const out = stations.map((s) => {
-    const id = String(s.id);
-    let flowMap = {};
-    try {
-      flowMap = JSON.parse(all[`flow_map:${id}`] || '{}');
-    } catch {
-      flowMap = {};
-    }
-    const values = {};
-    const metricIds = {};
-    const stationMetrics = [];
-    for (const m of metrics) {
-      if (m.source_type === 'station' && m.source_id === id) {
-        values[m.mkey] = m.value_kind === 'number' ? m.last_value_num : m.last_value_text;
-        metricIds[m.mkey] = m.id;
-        stationMetrics.push(toMetric(m));
-      }
-    }
-    const energy = {};
-    let energyDay = null;
-    for (const e of today) {
-      if (String(e.station_id) === id) {
-        energy[e.mkey] = e.value;
-        energyDay = e.day;
-      }
-    }
-    const devs = devices
-      .filter((d) => String(d.station_id) === id)
-      .map((d) => {
-        const dm = metrics.filter((m) => m.source_type === 'device' && m.source_id === d.sn);
-        // The merged inverter settings; raw answers stay on the Inverter page.
-        let config = null;
-        try {
-          const c = JSON.parse(all[`device_config:${d.sn}`] || 'null');
-          config = c && { at: c.at, battery: c.battery, system: c.system, tou: c.tou };
-        } catch {
-          config = null;
-        }
-        return {
-          sn: d.sn,
-          type: d.device_type,
-          connectStatus: d.connect_status,
-          lastTs: d.last_ts,
-          metrics: dm.map(toMetric),
-          config,
-        };
-      });
-    return {
-      id,
-      name: s.name || `Station ${id}`,
-      timezone: s.timezone,
-      lat: s.lat,
-      lng: s.lng,
-      installedCapacity: s.installed_capacity,
-      lastTs: s.last_ts,
-      values,
-      metricIds,
-      metrics: stationMetrics,
-      energy,
-      energyDay,
-      flowMap,
-      devices: devs,
-    };
-  });
-  res.json({ stations: out, serverTime: Math.floor(Date.now() / 1000) });
+  res.json(await liveStations());
 });
 
 // Which reading feeds each power-flow node, and the display names of the grid and generator

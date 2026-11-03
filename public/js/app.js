@@ -8,6 +8,8 @@ import * as energy from './views/energy.js';
 import * as insights from './views/insights.js';
 import * as devices from './views/devices.js';
 import * as inverterView from './views/inverter.js';
+import * as smartView from './views/smart.js';
+import * as automationsView from './views/automations.js';
 import * as settingsView from './views/settings.js';
 
 const ROUTES = {
@@ -17,6 +19,8 @@ const ROUTES = {
   insights: { view: insights, title: 'Battery insights', icon: 'insight' },
   devices: { view: devices, title: 'Devices & Readings', icon: 'device' },
   inverter: { view: inverterView, title: 'Inverter settings', icon: 'sliders' },
+  smart: { view: smartView, title: 'Smart devices', icon: 'smarthome' },
+  automations: { view: automationsView, title: 'Automations', icon: 'zap' },
   settings: { view: settingsView, title: 'Settings', icon: 'settings' },
 };
 

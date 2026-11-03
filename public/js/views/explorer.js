@@ -44,6 +44,10 @@ export function rangeToTimes(range, customFrom, customTo) {
 }
 
 function sourceName(sources, type, id) {
+  if (type === 'ewelink') {
+    const d = (sources.smartDevices || []).find((x) => x.id === id);
+    return d ? d.name : `Smart device ${id}`;
+  }
   if (type === 'station') {
     const st = sources.stations.find((s) => s.id === id);
     return st ? st.name : `Station ${id}`;
@@ -106,6 +110,7 @@ export async function mount(root, ctx) {
     for (const d of s.devices) sourceOptions.push({ value: `device:${d.sn}`, label: `↳ ${sourceName(sources, 'device', d.sn)}` });
   }
   for (const d of sources.unassignedDevices || []) sourceOptions.push({ value: `device:${d.sn}`, label: sourceName(sources, 'device', d.sn) });
+  for (const d of sources.smartDevices || []) sourceOptions.push({ value: `ewelink:${d.id}`, label: `${d.name} (smart device)` });
   const categories = [...new Set(metrics.map((m) => m.category))].sort();
 
   root.innerHTML = `

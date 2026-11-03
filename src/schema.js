@@ -138,6 +138,82 @@ module.exports = [
     KEY idx_inverter_commands_status (status)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
+  // Smart devices from eWeLink (Sonoff and others). params is the device's last known state as
+  // eWeLink reports it (JSON); its readings and on/off changes are also stored as metrics with
+  // source_type 'ewelink', so they get history and charts like the inverter's readings.
+  `CREATE TABLE IF NOT EXISTS ewelink_devices (
+    deviceid VARCHAR(64) NOT NULL,
+    name VARCHAR(191) NULL,
+    uiid INT NULL,
+    model VARCHAR(128) NULL,
+    brand VARCHAR(128) NULL,
+    item_type TINYINT NOT NULL DEFAULT 1,
+    apikey VARCHAR(128) NULL,
+    family_id VARCHAR(64) NULL,
+    room_id VARCHAR(64) NULL,
+    room_name VARCHAR(191) NULL,
+    online TINYINT(1) NULL,
+    params MEDIUMTEXT NULL,
+    raw MEDIUMTEXT NULL,
+    hidden TINYINT(1) NOT NULL DEFAULT 0,
+    sort_index INT NOT NULL DEFAULT 0,
+    seen_ts INT UNSIGNED NULL,
+    updated_ts INT UNSIGNED NULL,
+    PRIMARY KEY (deviceid)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+
+  // Every command sent to a smart device: by a person, an automation or a test, and how it went.
+  `CREATE TABLE IF NOT EXISTS ewelink_actions (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+    deviceid VARCHAR(64) NOT NULL,
+    params TEXT NOT NULL,
+    summary VARCHAR(255) NULL,
+    source VARCHAR(16) NOT NULL,
+    user_id INT UNSIGNED NULL,
+    username VARCHAR(64) NULL,
+    automation_id INT UNSIGNED NULL,
+    status VARCHAR(12) NOT NULL,
+    message VARCHAR(512) NULL,
+    created_ts INT UNSIGNED NOT NULL,
+    PRIMARY KEY (id),
+    KEY idx_ewelink_actions_device (deviceid, created_ts),
+    KEY idx_ewelink_actions_ts (created_ts)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+
+  // Automations: "when these conditions hold, do these actions" (and optionally something else
+  // when they stop holding). rule is JSON; the other columns are the engine's memory between runs.
+  `CREATE TABLE IF NOT EXISTS automations (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+    name VARCHAR(191) NOT NULL,
+    enabled TINYINT(1) NOT NULL DEFAULT 1,
+    rule MEDIUMTEXT NOT NULL,
+    sort_index INT NOT NULL DEFAULT 0,
+    matching TINYINT(1) NULL,
+    matching_since INT UNSIGNED NULL,
+    fired VARCHAR(8) NULL,
+    fired_ts INT UNSIGNED NULL,
+    checked_ts INT UNSIGNED NULL,
+    last_note VARCHAR(512) NULL,
+    created_by VARCHAR(64) NULL,
+    created_ts INT UNSIGNED NOT NULL,
+    updated_ts INT UNSIGNED NOT NULL,
+    PRIMARY KEY (id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+
+  // What each automation did and why (the conditions' values when it ran).
+  `CREATE TABLE IF NOT EXISTS automation_runs (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+    automation_id INT UNSIGNED NOT NULL,
+    ts INT UNSIGNED NOT NULL,
+    branch VARCHAR(8) NOT NULL,
+    status VARCHAR(12) NOT NULL,
+    reason TEXT NULL,
+    message TEXT NULL,
+    PRIMARY KEY (id),
+    KEY idx_automation_runs (automation_id, ts),
+    KEY idx_automation_runs_ts (ts)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+
   `CREATE TABLE IF NOT EXISTS collector_runs (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     kind VARCHAR(24) NOT NULL,
