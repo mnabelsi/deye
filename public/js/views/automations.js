@@ -101,6 +101,14 @@ export async function mount(root, ctx) {
   };
   const devById = new Map(c.devices.map((d) => [d.id, d]));
   const metricById = new Map(metrics.map((m) => [m.id, m]));
+  const myZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const clockIn = (tz) => {
+    try {
+      return new Intl.DateTimeFormat('en-GB', { timeZone: tz, weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date());
+    } catch {
+      return '';
+    }
+  };
   let editing = null; // { id|null, draft }
   let checkResults = null;
 
@@ -173,8 +181,12 @@ export async function mount(root, ctx) {
     if (devs.status.reconnectNeeded) parts.push(`<div class="alert err">${icon('warn')}<div class="grow"><b>The eWeLink sign-in has expired.</b> Automations can't switch devices until it is reconnected${canEdit ? ' in <a href="#/settings?section=ewelink">Settings</a>' : ''}.</div></div>`);
     if (!devs.status.connected) parts.push(`<div class="alert warn">${icon('warn')}<div class="grow"><b>eWeLink is not connected.</b> Automations need it to switch devices. ${canEdit ? '<a href="#/settings?section=ewelink">Connect it in Settings</a>.' : 'Ask an admin to connect it.'}</div></div>`);
     if (data.paused) parts.push(`<div class="alert warn">${icon('warn')}<div class="grow"><b>All automations are paused.</b></div>${canEdit ? '<button class="btn sm" id="resume">Resume</button>' : ''}</div>`);
+    // Time conditions follow one clock; say so when it isn't the clock on this device.
+    if (myZone && data.timeZone && clockIn(myZone) !== clockIn(data.timeZone)) {
+      parts.push(`<div class="alert warn">${icon('warn')}<div class="grow"><b>Time conditions use ${esc(data.timeZone)} time, where it is now ${esc(clockIn(data.timeZone))}.</b> This device is on ${esc(myZone)} time (${esc(clockIn(myZone))}), so timed rules run at different hours than the clock here shows.</div>${canEdit ? `<button class="btn sm" id="use-zone">Use ${esc(myZone)} time</button>` : ''}</div>`);
+    }
     parts.push(`<div class="alert">${icon('info')}<div class="grow small">Automations are checked every minute. They act when their conditions <b>start</b> holding, and run their “otherwise” actions when they <b>stop</b> holding, like scenes in the eWeLink app.
-      Inverter readings come from DeyeCloud every few minutes, so a grid cut can take that long to show. While the inverter's data is stale, rules wait instead of acting on old values.</div>
+      Inverter readings come from DeyeCloud every few minutes, so a grid cut can take that long to show. While the inverter's data is stale, rules wait instead of acting on old values. Times of day are in ${esc(data.timeZone || 'server')} time.</div>
       ${canEdit && !data.paused && data.automations.length ? '<button class="btn sm" id="pause">Pause all</button>' : ''}</div>`);
     $('#banner', root).innerHTML = parts.join('');
   }
@@ -247,7 +259,7 @@ export async function mount(root, ctx) {
       case 'battery':
         return `<span>Battery is</span>${sel('state', x.state, [['charging', 'charging'], ['discharging', 'discharging'], ['idle', 'idle']])}`;
       case 'time':
-        return `<span>between</span><input type="time" data-f="from" value="${esc(x.from)}"><span>and</span><input type="time" data-f="to" value="${esc(x.to)}"><span class="small faint">${esc(station0 && station0.timezone ? `(${station0.timezone} time)` : '')}</span>
+        return `<span>between</span><input type="time" data-f="from" value="${esc(x.from)}"><span>and</span><input type="time" data-f="to" value="${esc(x.to)}"><span class="small faint">${esc(data.timeZone ? `(${data.timeZone} time)` : '')}</span>
           <span class="day-picks">${DAYS.map((d, i) => `<label class="check small"><input type="checkbox" data-day="${i + 1}" ${x.days.includes(i + 1) ? 'checked' : ''}>${d}</label>`).join('')}</span>`;
       case 'device':
         return `<select data-f="deviceId">${deviceOptions(x.deviceId)}</select>${channelSelect(x.deviceId, x.channel, 'channel', 'Any channel')}<span>is</span>${sel('state', x.state, [['on', 'on'], ['off', 'off'], ['online', 'online'], ['offline', 'offline']])}`;
@@ -478,6 +490,10 @@ export async function mount(root, ctx) {
         await reload();
       } else if (t.id === 'pause' || t.id === 'resume') {
         await api.post('/api/automations/paused', { paused: t.id === 'pause' });
+        await reload();
+      } else if (t.id === 'use-zone') {
+        await api.post('/api/automations/timezone', { timeZone: myZone });
+        toast(`Time conditions now use ${myZone} time`, 'ok');
         await reload();
       }
     } catch (err) {

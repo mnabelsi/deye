@@ -34,6 +34,7 @@ const DEFAULTS = {
   ewelink_live: '1',
   ewelink_power_reports: '1',
   automations_enabled: '1',
+  automation_timezone: '',
 };
 
 async function loadAll(force) {
