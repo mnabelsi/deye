@@ -27,7 +27,10 @@ router.get('/', async (req, res) => {
     `SELECT r.*, a.name FROM automation_runs r LEFT JOIN automations a ON a.id = r.automation_id ORDER BY r.id DESC LIMIT ?`,
     [Math.min(500, Math.max(10, parseInt(req.query.runs, 10) || 100))]
   );
+  const tz = await automations.timeZone();
   res.json({
+    timeZone: tz.timeZone,
+    timeZoneChosen: tz.chosen,
     automations: rows.map(automations.toApi),
     runs: runs.map((r) => ({ id: r.id, automationId: r.automation_id, name: r.name || `#${r.automation_id}`, ts: r.ts, branch: r.branch, status: r.status, reason: r.reason, message: r.message })),
     paused: (await settings.get('automations_enabled')) === '0',
@@ -86,6 +89,12 @@ router.delete('/:id', async (req, res) => {
   await db.query('DELETE FROM automations WHERE id = ?', [row.id]);
   await db.query('DELETE FROM automation_runs WHERE automation_id = ?', [row.id]);
   res.json({ ok: true });
+});
+
+// The time zone "time of day" conditions are read in.
+router.post('/timezone', async (req, res) => {
+  await automations.setTimeZone(String((req.body && req.body.timeZone) || ''));
+  res.json(await automations.timeZone());
 });
 
 // Pauses or resumes every automation at once.

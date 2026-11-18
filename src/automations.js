@@ -158,6 +158,32 @@ function localClock(timeZone, now = Date.now()) {
   }
 }
 
+function validZone(tz) {
+  if (!tz || typeof tz !== 'string') return null;
+  try {
+    new Intl.DateTimeFormat('en', { timeZone: tz });
+    return tz;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The zone time conditions are read in: the one chosen on the Automations page, else the first
+ * station's, else the server's. `chosen` says whether someone picked it.
+ */
+async function timeZone() {
+  const chosen = validZone(await settings.get('automation_timezone'));
+  if (chosen) return { timeZone: chosen, chosen: true };
+  const st = await db.one("SELECT timezone FROM stations WHERE enabled = 1 AND timezone IS NOT NULL AND timezone <> '' ORDER BY name LIMIT 1");
+  return { timeZone: validZone(st && st.timezone) || Intl.DateTimeFormat().resolvedOptions().timeZone, chosen: false };
+}
+
+async function setTimeZone(tz) {
+  if (!validZone(tz)) throw badRequest('Unknown time zone');
+  await settings.set({ automation_timezone: tz });
+}
+
 /** Everything conditions need, read once per run: each station's power flow, and smart devices. */
 async function snapshot() {
   const f = await flow();
@@ -190,7 +216,7 @@ async function snapshot() {
     });
   }
   const devs = new Map((await ewelink.loadAll()).map((d) => [d.deviceid, d]));
-  return { stations: byStation, devices: devs, now };
+  return { stations: byStation, devices: devs, now, timeZone: validZone(await settings.get('automation_timezone')) };
 }
 
 function stationFor(rule, snap) {
@@ -267,7 +293,8 @@ function evaluate(c, rule, snap) {
       return { ok: compare(v, c.op, c.value), text: `${m.label} ${fmt(v, 2)} ${m.unit} (wanted ${OPS[c.op]} ${fmt(c.value, 2)})` };
     }
     case 'time': {
-      const clock = localClock(st ? st.timezone : null);
+      const tz = snap.timeZone || (st && st.timezone) || Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const clock = localClock(tz);
       const from = minutesOf(c.from);
       const to = minutesOf(c.to);
       // A window past midnight (22:00–06:00) belongs to the day it started on.
@@ -275,7 +302,7 @@ function evaluate(c, rule, snap) {
       const day = from > to && clock.minutes < to ? ((clock.day + 5) % 7) + 1 : clock.day;
       const dayOk = c.days.length === 7 || c.days.includes(day);
       const days = c.days.length === 7 ? '' : ` on ${c.days.map((d) => DAY_NAMES[d - 1]).join(', ')}`;
-      return { ok: inWindow && dayOk, text: `Time ${clock.text} (wanted ${c.from}–${c.to}${days})` };
+      return { ok: inWindow && dayOk, text: `Time ${clock.text} ${tz} (wanted ${c.from}–${c.to}${days})` };
     }
     case 'device': {
       const dev = snap.devices.get(c.deviceId);
@@ -523,4 +550,4 @@ async function runNow(id, branch) {
   return act(row, rule, 'test', actions, snap, `Run by hand (${branch === 'else' ? '"otherwise" actions' : 'actions'})`);
 }
 
-module.exports = { tick, cleanRule, check, runNow, toApi, evaluateRule, NODE_LABELS, POWER_NODES };
+module.exports = { tick, timeZone, setTimeZone, cleanRule, check, runNow, toApi, evaluateRule, NODE_LABELS, POWER_NODES };
