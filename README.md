@@ -53,8 +53,11 @@ Built with plain **Node.js + Express** (no build step) so it deploys as-is on **
   on the inverter's readings, such as *load above 3000 W*). From the same history: the hours each source is
   usually on, how long cuts last, and how long the battery carries the home before the generator starts. It is
   worked out from the stored readings, so imported history counts and nothing extra needs to run.
-  A **forecast** shows when the grid is likely to be on today and tomorrow, hour by hour: it finds how the
-  schedule repeats (daily, every few days, weekly), and says how often that was right over the last two weeks.
+  A **prediction** widget (also on the Overview) shows when the grid is likely to be on today and tomorrow. A
+  rationed grid alternates between a few day schedules, so past days are grouped into **cases** ("on 14:00–18:00",
+  "on 22:00–00:00"…), the order they come in is learned (alternating, every few days, by weekday, or which case
+  follows which), and each possible case for today and tomorrow is listed with its chance. The page says how often
+  that was right over the last weeks.
 - **Automations** – rules such as *when the grid is on, turn the heater on (and off when it goes)* or *between
   00:00 and 05:00, if the battery is under 30%, turn off all the lights*. Conditions: grid or generator on/off,
   battery level, solar, home load, grid import/export, spare solar, battery charging or discharging, any inverter

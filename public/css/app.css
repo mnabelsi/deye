@@ -616,14 +616,31 @@ details#raw[open] > summary h2::after { content: ' ▾'; }
 .ev-dot.custom { background: var(--primary); }
 .ev-dot.custom.end { background: transparent; box-shadow: inset 0 0 0 2px var(--primary); }
 
-.fc { display: grid; gap: 12px; }
-.fc-row { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 12px; align-items: start; }
-.fc-label { font-size: 13px; padding-top: 5px; }
-.fc-strip { display: grid; grid-template-columns: repeat(24, minmax(0, 1fr)); gap: 2px; }
-.fc-cell { height: 26px; border-radius: 4px; background: color-mix(in srgb, var(--grid) var(--p), var(--surface-3)); }
+.fc { display: grid; gap: 14px; }
+.fc-row { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 12px; align-items: start; }
+.fc-label { font-size: 13px; padding-top: 4px; display: flex; flex-wrap: wrap; align-items: center; gap: 0 8px; }
+.fc-label .small { flex-basis: 100%; }
+.fc-strip { display: grid; grid-template-columns: repeat(48, minmax(0, 1fr)); gap: 1px; }
+.fc-cell { height: 26px; background: color-mix(in srgb, var(--grid) var(--p), var(--surface-3)); }
+.fc-cell:nth-child(odd) { border-radius: 4px 0 0 4px; }
+.fc-cell:nth-child(even) { border-radius: 0 4px 4px 0; margin-right: 1px; }
 .fc-cell.seen { opacity: 0.45; }
-.fc-cell.now { box-shadow: 0 0 0 2px var(--text); }
+.fc-cell.now { box-shadow: 0 0 0 2px var(--text); position: relative; }
+.fc-axis { grid-template-columns: repeat(24, minmax(0, 1fr)); }
 .fc-axis span { font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.case-chip {
+  display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 6px; flex-shrink: 0;
+  font-size: 12px; font-weight: 700; color: #fff; background: var(--c, var(--text-3));
+}
+.case-a { --c: var(--s1); } .case-b { --c: var(--s2); } .case-c { --c: var(--s3); }
+.case-d { --c: var(--s7); } .case-e { --c: var(--s5); } .case-f { --c: var(--s6); }
+.case-chip.none { background: var(--surface-3); color: var(--text-3); }
+.case-options { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 4px; font-size: 13px; }
+.case-options li { display: grid; grid-template-columns: 22px 42px minmax(0, 1fr); gap: 8px; align-items: center; }
+.case-options li span:last-child { color: var(--text-2); }
+.cal-title { font-size: 13px; margin: 18px 0 8px; }
+.cal { display: flex; flex-wrap: wrap; gap: 6px; }
+.cal-day { display: grid; justify-items: center; gap: 2px; font-size: 10.5px; color: var(--text-3); font-variant-numeric: tabular-nums; }
 @media (max-width: 760px) { .fc-row { grid-template-columns: minmax(0, 1fr); gap: 4px; } .fc-row > div:empty { display: none; } }
 
 /* ---------- Automations ---------- */
