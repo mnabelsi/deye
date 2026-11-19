@@ -336,7 +336,7 @@ export async function mount(root, ctx) {
 
   if (live.stations.length > 1) {
     ctx.actions.innerHTML = `<select id="station-select" class="inline-input">${live.stations.map((s) => `<option value="${esc(s.id)}">${esc(s.name)}</option>`).join('')}</select>`;
-    const sel = $('#station-select');
+    const sel = $('#station-select', ctx.actions);
     sel.value = stationId;
     sel.onchange = async () => {
       stationId = sel.value;
