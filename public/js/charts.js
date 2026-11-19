@@ -309,7 +309,7 @@ export function createBarChart(el, opts = {}) {
     return {
       backgroundColor: 'transparent',
       textStyle: { fontFamily: getComputedStyle(document.body).fontFamily },
-      grid: { left: 58, right: 20, top: 36, bottom: categories.length > 14 ? 70 : 40 },
+      grid: { left: 58, right: 20, top: 36, bottom: categories.length > 14 && !opts.noSlider ? 70 : 40 },
       legend: { show: false, data: series.map((s) => s.name), selected },
       tooltip: {
         trigger: 'axis',
@@ -341,7 +341,7 @@ export function createBarChart(el, opts = {}) {
         iconStyle: { borderColor: t.text3 },
         feature: { saveAsImage: { title: 'Save PNG', backgroundColor: t.surface, pixelRatio: 2 } },
       },
-      dataZoom: categories.length > 14
+      dataZoom: categories.length > 14 && !opts.noSlider
         ? [
             { type: 'inside' },
             { type: 'slider', height: 22, bottom: 8, borderColor: t.border, fillerColor: t.primarySoft, textStyle: { color: t.text3 }, handleStyle: { color: t.surface, borderColor: t.primary } },

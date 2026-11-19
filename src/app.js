@@ -46,6 +46,7 @@ function createApp() {
   app.use('/api/inverter', require('./routes/inverter'));
   app.use('/api/ewelink', require('./routes/ewelink').router);
   app.use('/api/automations', require('./routes/automations'));
+  app.use('/api/event-log', require('./routes/events'));
   app.use('/api', require('./routes/data'));
 
   app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));

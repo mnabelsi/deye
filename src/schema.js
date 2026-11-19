@@ -214,6 +214,18 @@ module.exports = [
     KEY idx_automation_runs_ts (ts)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
+  // Custom events for the Events page: a named condition on the inverter's readings. When it
+  // started and stopped holding is worked out from the stored history, so nothing else is stored.
+  `CREATE TABLE IF NOT EXISTS event_rules (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+    name VARCHAR(191) NOT NULL,
+    rule MEDIUMTEXT NOT NULL,
+    created_by VARCHAR(64) NULL,
+    created_ts INT UNSIGNED NOT NULL,
+    updated_ts INT UNSIGNED NOT NULL,
+    PRIMARY KEY (id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+
   `CREATE TABLE IF NOT EXISTS collector_runs (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     kind VARCHAR(24) NOT NULL,
