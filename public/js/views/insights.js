@@ -63,7 +63,7 @@ export async function mount(root, ctx) {
           ${live.stations.length > 1 ? `<select id="station" class="inline-input">${live.stations.map((s) => `<option value="${esc(s.id)}">${esc(s.name)}</option>`).join('')}</select>` : ''}
           <div class="seg" id="periods">${PERIODS.map(([k, l]) => `<button data-p="${k}">${l}</button>`).join('')}</div>
           <span class="spacer"></span>
-          <a class="btn sm ghost" href="#assumptions">${icon('settings')} Assumptions</a>
+          <button class="btn sm ghost" id="to-assumptions">${icon('settings')} Assumptions</button>
         </div>
       </div>
       <div id="body"></div>
@@ -372,6 +372,11 @@ export async function mount(root, ctx) {
     };
   }
 
+  // A plain "#assumptions" link would be read as a page address and open the Overview.
+  $('#to-assumptions', root).onclick = () => {
+    const card = $('#assumptions', root);
+    if (card) card.scrollIntoView({ behavior: 'smooth' });
+  };
   $('#periods', root).onclick = (e) => {
     const b = e.target.closest('button');
     if (!b) return;
