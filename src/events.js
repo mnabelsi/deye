@@ -19,6 +19,17 @@ const HYSTERESIS = 2; // % the battery must move away from a level before it can
 const MAX_DAYS = 400;
 const MAX_EVENTS = 4000;
 const USUAL_SHARE = 0.6; // "usually on" in an hour of the day: on this share of the time
+const FORECAST_DAYS = 56; // history the forecast learns from
+const BACKTEST_DAYS = 14; // recent days each way of forecasting is scored on
+const LIKELY = 0.6; // chance from which an hour counts as "likely on"
+const POSSIBLE = 0.4;
+// Ways a schedule can repeat: every `every` days, looking `back` repeats back, each older one
+// weighted `decay` times the one after it. The first is "the same hours most days".
+const CYCLES = [
+  { every: 1, back: 28, decay: 0.93 },
+  ...[1, 2, 3, 4, 5, 6, 7].map((every) => ({ every, back: 4, decay: 0.6 })),
+  { every: 14, back: 3, decay: 0.6 },
+];
 const RULE_TYPES = ['soc', 'power', 'battery', 'reading', 'source'];
 const POWER_ROLES = ['solar', 'load', 'grid', 'generator', 'battery'];
 
@@ -196,13 +207,100 @@ function usualHours(share) {
   return out.sort((a, b) => a[0] - b[0]);
 }
 
+// ---------- forecast ----------
+
+/**
+ * When a source is likely to be on today and tomorrow, from how its past days went.
+ * `slots` maps day × 24 + hour (local days since 1970) to the share of that hour it was on.
+ * Each way a schedule can repeat (CYCLES) is scored on the last two weeks, hour by hour, and the
+ * best one makes the forecast; its score is returned so the page can say how far to trust it.
+ */
+function forecast(slots, today, hourNow) {
+  const guess = (c, day, hour) => {
+    let sum = 0;
+    let weight = 0;
+    let w = 1;
+    for (let k = 1; k <= c.back; k++, w *= c.decay) {
+      const v = slots.get((day - k * c.every) * 24 + hour);
+      if (v === undefined) continue;
+      sum += v * w;
+      weight += w;
+    }
+    return weight ? sum / weight : null;
+  };
+  let best = null;
+  let onHours = 0;
+  let hours = 0;
+  for (const c of CYCLES) {
+    let error = 0;
+    let right = 0;
+    let n = 0;
+    for (let day = today - BACKTEST_DAYS; day < today; day++) {
+      for (let h = 0; h < 24; h++) {
+        const actual = slots.get(day * 24 + h);
+        const p = actual === undefined ? null : guess(c, day, h);
+        if (p === null) continue;
+        error += (p - actual) ** 2;
+        right += p >= 0.5 === actual >= 0.5 ? 1 : 0;
+        n += 1;
+      }
+    }
+    if (c === CYCLES[0]) {
+      for (let day = today - BACKTEST_DAYS; day < today; day++) {
+        for (let h = 0; h < 24; h++) {
+          const actual = slots.get(day * 24 + h);
+          if (actual === undefined) continue;
+          hours += 1;
+          if (actual >= 0.5) onHours += 1;
+        }
+      }
+    }
+    // A way of forecasting needs a few days it could be checked on before it can be trusted.
+    if (n < 72) continue;
+    const score = { cycle: c, error: error / n, accuracy: right / n, hours: n };
+    if (!best || score.error < best.error - 1e-9) best = score;
+  }
+  if (!best) return null;
+  const days = [today, today + 1].map((day, i) => {
+    const chance = [];
+    const seen = [];
+    for (let h = 0; h < 24; h++) {
+      const actual = slots.get(day * 24 + h);
+      // Hours of today that are over show what happened rather than a guess.
+      const past = i === 0 && h < hourNow && actual !== undefined;
+      seen.push(past);
+      chance.push(past ? actual : guess(best.cycle, day, h));
+    }
+    const ranges = (test) => {
+      const out = [];
+      for (let h = 0; h < 24; h++) {
+        if (seen[h] || (i === 0 && h < hourNow) || chance[h] === null || !test(chance[h])) continue;
+        if (out.length && out[out.length - 1][1] === h) out[out.length - 1][1] = h + 1;
+        else out.push([h, h + 1]);
+      }
+      return out;
+    };
+    return { day, chance, seen, likely: ranges((p) => p >= LIKELY), possible: ranges((p) => p >= POSSIBLE && p < LIKELY) };
+  });
+  return {
+    every: best.cycle.every,
+    average: best.cycle === CYCLES[0],
+    accuracy: best.accuracy,
+    // What always answering the commoner of "on" and "off" would have scored: the bar to beat.
+    baseline: hours ? Math.max(onHours, hours - onHours) / hours : null,
+    checkedHours: best.hours,
+    hourNow,
+    days,
+  };
+}
+
 // ---------- the timeline ----------
 
 /**
  * Events and patterns for one station between two instants.
  * Returns { events, sources, battery, levels, rules, names, timeZone, … } (see the Events page).
  */
-async function build({ stationId, from, to }) {
+async function build({ stationId, from, to, withForecast = false }) {
   const now = nowSec();
   to = Math.min(Number.isFinite(to) ? to : now, now);
   from = Math.max(Number.isFinite(from) ? from : to - 7 * 86400, to - MAX_DAYS * 86400);
@@ -271,8 +369,8 @@ async function build({ stationId, from, to }) {
   const local = (t) => t + offsetOf(t);
   const events = [];
   const src = {
-    grid: { tr: tracker(), on: new Float64Array(24), known: new Float64Array(24), starts: new Array(24).fill(0) },
-    generator: { tr: tracker(), on: new Float64Array(24), known: new Float64Array(24), starts: new Array(24).fill(0) },
+    grid: { tr: tracker(), on: new Float64Array(24), known: new Float64Array(24), starts: new Array(24).fill(0), slots: new Map() },
+    generator: { tr: tracker(), on: new Float64Array(24), known: new Float64Array(24), starts: new Array(24).fill(0), slots: new Map() },
   };
   const island = { tr: tracker(), socStart: null, runs: [] };
   const ruleTr = customs.map(() => tracker());
@@ -289,10 +387,15 @@ async function build({ stationId, from, to }) {
     } else if (prevT !== null && prevT >= from) {
       // The time since the previous sample counts towards the state it showed.
       const h = Math.floor((local(prevT) % 86400) / 3600);
+      const slot = Math.floor(local(prevT) / 86400) * 24 + h;
       for (const s of [src.grid, src.generator]) {
         if (s.tr.state === null) continue;
         s.known[h] += t - prevT;
         if (s.tr.state) s.on[h] += t - prevT;
+        if (!withForecast) continue;
+        const x = s.slots.get(slot) || s.slots.set(slot, [0, 0]).get(slot);
+        x[1] += t - prevT;
+        if (s.tr.state) x[0] += t - prevT;
       }
     }
     const v = { reading: (id) => reading(id, t) };
@@ -365,6 +468,12 @@ async function build({ stationId, from, to }) {
   const lengths = (tr, state) => tr.intervals.filter((x) => x.exact && x.state === state && x.from >= from).map((x) => x.to - x.from);
   const stale = prevT === null || now - prevT > GAP;
   const current = (tr) => (tr.state === null || stale ? null : { on: tr.state, since: tr.since, exact: tr.exact });
+  const forecastFor = (raw) => {
+    // Hours with readings for less than a third of them say too little to learn from.
+    const slots = new Map();
+    for (const [k, [on, known]] of raw) if (known >= 1200) slots.set(k, on / known);
+    return forecast(slots, Math.floor(local(now) / 86400), Math.floor((local(now) % 86400) / 3600));
+  };
   const sources = [];
   for (const kind of ['grid', 'generator']) {
     if (kind === 'grid' ? !hasGrid : !hasGenerator) continue;
@@ -385,6 +494,7 @@ async function build({ stationId, from, to }) {
       onStretch: stats(lengths(s.tr, true)),
       offStretch: stats(lengths(s.tr, false)),
       now: current(s.tr),
+      forecast: withForecast ? forecastFor(s.slots) : undefined,
     });
   }
 
@@ -421,4 +531,11 @@ async function build({ stationId, from, to }) {
   };
 }
 
-module.exports = { build, levels, setLevels, rules, saveRule, deleteRule };
+/** Forecasts per source for today and tomorrow, learned from the last weeks whatever period is shown. */
+async function forecasts(stationId) {
+  const now = nowSec();
+  const data = await build({ stationId, from: now - FORECAST_DAYS * 86400, to: now, withForecast: true });
+  return { timeZone: data.timeZone, sources: data.sources.map((s) => ({ kind: s.kind, name: s.name, now: s.now, onStretch: s.onStretch, offStretch: s.offStretch, forecast: s.forecast })) };
+}
+
+module.exports = { build, forecasts, forecast, levels, setLevels, rules, saveRule, deleteRule };

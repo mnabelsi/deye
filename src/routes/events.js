@@ -14,6 +14,10 @@ router.get('/', async (req, res) => {
   res.json({ ...data, powerNodes: automations.POWER_NODES.map((k) => ({ key: k, label: automations.NODE_LABELS[k] })), canEdit: Boolean(req.user.is_admin) });
 });
 
+router.get('/forecast', async (req, res) => {
+  res.json(await events.forecasts(req.query.station));
+});
+
 router.use(auth.requireAdmin);
 
 router.put('/levels', async (req, res) => {
