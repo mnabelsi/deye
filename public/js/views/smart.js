@@ -190,7 +190,7 @@ async function mountList(root, ctx) {
       render();
     }
   });
-  const syncBtn = $('#sync');
+  const syncBtn = $('#sync', ctx.actions);
   if (syncBtn) {
     syncBtn.onclick = async () => {
       syncBtn.disabled = true;

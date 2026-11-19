@@ -31,6 +31,7 @@ const state = {
   sources: null,
   status: null,
   cleanup: null,
+  visit: 0,
   statusTimer: null,
 };
 
@@ -183,21 +184,31 @@ async function route() {
   }
   document.querySelectorAll('.nav a').forEach((a) => a.classList.toggle('active', a.dataset.route === name));
   $('#page-title').textContent = r.title;
-  $('#page-actions').innerHTML = '';
   document.title = `${r.title} · Deye Monitor`;
-  const content = $('#content');
+  // Each visit gets its own container. A page that is still loading when the user moves on then
+  // finishes into a detached element instead of the next page's (where its elements don't exist).
+  const visit = ++state.visit;
+  const content = document.createElement('div');
   content.innerHTML = '<div class="boot" style="min-height:40vh"><div class="spinner"></div></div>';
+  $('#content').replaceChildren(content);
+  const actions = document.createElement('div');
+  actions.className = 'row';
+  $('#page-actions').replaceChildren(actions);
+  const current = () => visit === state.visit;
   const ctx = {
     params,
     user: state.user,
-    actions: $('#page-actions'),
-    setTitle: (t) => ($('#page-title').textContent = t),
+    actions,
+    setTitle: (t) => current() && ($('#page-title').textContent = t),
     navigate,
     store,
   };
   try {
-    state.cleanup = (await r.view.mount(content, ctx)) || null;
+    const cleanup = (await r.view.mount(content, ctx)) || null;
+    if (current()) state.cleanup = cleanup;
+    else if (cleanup) cleanup();
   } catch (err) {
+    if (!current()) return;
     console.error(err);
     content.innerHTML = `<div class="alert err">${icon('warn')}<div class="grow"><b>Could not load this page.</b><br>${esc(err.message)}</div></div>`;
   }

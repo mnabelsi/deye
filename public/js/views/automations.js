@@ -500,7 +500,7 @@ export async function mount(root, ctx) {
       toast(err.message, 'err');
     }
   });
-  const nb = $('#new-rule');
+  const nb = $('#new-rule', ctx.actions);
   if (nb) nb.onclick = () => openEditor(null);
 
   async function reload() {
