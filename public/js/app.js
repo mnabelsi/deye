@@ -6,6 +6,7 @@ import * as overview from './views/overview.js';
 import * as explorer from './views/explorer.js';
 import * as energy from './views/energy.js';
 import * as insights from './views/insights.js';
+import * as eventsView from './views/events.js';
 import * as devices from './views/devices.js';
 import * as inverterView from './views/inverter.js';
 import * as smartView from './views/smart.js';
@@ -16,6 +17,7 @@ const ROUTES = {
   overview: { view: overview, title: 'Overview', icon: 'overview' },
   charts: { view: explorer, title: 'Charts', icon: 'chart' },
   energy: { view: energy, title: 'Energy', icon: 'energy' },
+  events: { view: eventsView, title: 'Events & patterns', icon: 'history' },
   insights: { view: insights, title: 'Battery insights', icon: 'insight' },
   devices: { view: devices, title: 'Devices & Readings', icon: 'device' },
   inverter: { view: inverterView, title: 'Inverter settings', icon: 'sliders' },

@@ -35,6 +35,7 @@ const DEFAULTS = {
   ewelink_power_reports: '1',
   automations_enabled: '1',
   automation_timezone: '',
+  event_soc_levels: '50,80,100',
 };
 
 async function loadAll(force) {

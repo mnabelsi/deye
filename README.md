@@ -48,6 +48,11 @@ Built with plain **Node.js + Express** (no build step) so it deploys as-is on **
   for how long, charts, a log of who switched it (a person, an automation, or something outside such as the
   eWeLink app or a wall switch), eWeLink's own operation log, and, for POW plugs, their last 100 days of energy.
   Device readings also appear in **Charts** next to the inverter's. See [Smart devices](#smart-devices-ewelink).
+- **Events & patterns** – a log of when the grid and the generator came on and went off, when the battery
+  reached or dropped to chosen levels (50, 80 and 100 % by default) and when your own events held (any condition
+  on the inverter's readings, such as *load above 3000 W*). From the same history: the hours each source is
+  usually on, how long cuts last, and how long the battery carries the home before the generator starts. It is
+  worked out from the stored readings, so imported history counts and nothing extra needs to run.
 - **Automations** – rules such as *when the grid is on, turn the heater on (and off when it goes)* or *between
   00:00 and 05:00, if the battery is under 30%, turn off all the lights*. Conditions: grid or generator on/off,
   battery level, solar, home load, grid import/export, spare solar, battery charging or discharging, any inverter
