@@ -616,6 +616,16 @@ details#raw[open] > summary h2::after { content: ' ▾'; }
 .ev-dot.custom { background: var(--primary); }
 .ev-dot.custom.end { background: transparent; box-shadow: inset 0 0 0 2px var(--primary); }
 
+.fc { display: grid; gap: 12px; }
+.fc-row { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 12px; align-items: start; }
+.fc-label { font-size: 13px; padding-top: 5px; }
+.fc-strip { display: grid; grid-template-columns: repeat(24, minmax(0, 1fr)); gap: 2px; }
+.fc-cell { height: 26px; border-radius: 4px; background: color-mix(in srgb, var(--grid) var(--p), var(--surface-3)); }
+.fc-cell.seen { opacity: 0.45; }
+.fc-cell.now { box-shadow: 0 0 0 2px var(--text); }
+.fc-axis span { font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+@media (max-width: 760px) { .fc-row { grid-template-columns: minmax(0, 1fr); gap: 4px; } .fc-row > div:empty { display: none; } }
+
 /* ---------- Automations ---------- */
 .rule-card.disabled { opacity: 0.7; }
 .rule-card .card-head h2 { min-width: 160px; }
