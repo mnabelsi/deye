@@ -1,6 +1,7 @@
 import { api } from '../api.js';
 import { $, $$, esc, icon, toast, fmtNumber, cssVar, modal, confirmDialog } from '../util.js';
 import { createBarChart } from '../charts.js';
+import { predictionCard, casesCard } from '../prediction.js';
 
 // Events: when the grid and the generator came on and went off, when the battery crossed chosen
 // levels and when custom conditions held, plus the patterns in them (the hours a source is usually
@@ -47,6 +48,7 @@ export async function mount(root, ctx) {
       <div id="notice"></div>
       <div class="grid kpis" id="now"></div>
       <div id="forecast"></div>
+      <div id="cases"></div>
       <div class="ev-cols">
         <div class="card"><div class="card-head"><h2>${icon('history', 'style="width:16px;height:16px;vertical-align:-3px"')} What happened</h2></div>
           <div class="chips" id="filters" style="margin-bottom:10px"></div><div id="events"></div></div>
@@ -144,60 +146,10 @@ export async function mount(root, ctx) {
     $('#now', root).innerHTML = tiles.join('');
   }
 
-  // ---------- forecast ----------
+  // ---------- prediction and day cases ----------
   function renderForecast() {
-    const s = fc && fc.sources.find((x) => x.kind === 'grid');
-    const el = $('#forecast', root);
-    if (!s) {
-      el.innerHTML = '';
-      return;
-    }
-    const f = s.forecast;
-    const head = `<div class="card-head"><h2>${esc(s.name)} forecast</h2></div>`;
-    if (!f) {
-      el.innerHTML = `<div class="card">${head}<p class="muted" style="margin:0">Not enough history to forecast yet. It needs a few days of readings; importing history in Settings gives it more to learn from.</p></div>`;
-      return;
-    }
-    const dayName = (day, i) => `${i ? 'Tomorrow' : 'Today'} · ${new Date(day * 86400000).toLocaleDateString(undefined, { timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric' })}`;
-    const rows = f.days
-      .map((d, i) => {
-        const cells = d.chance
-          .map((p, h) => {
-            const pct = p === null ? null : Math.round(p * 100);
-            const tip = `${pad(h)}:00–${pad((h + 1) % 24)}:00 · ${pct === null ? 'no forecast' : d.seen[h] ? `was on ${pct}% of the hour` : `${pct}% chance`}`;
-            return `<span class="fc-cell ${d.seen[h] ? 'seen' : ''} ${!i && h === f.hourNow ? 'now' : ''}" style="--p:${pct === null ? 0 : pct}%" title="${esc(tip)}"></span>`;
-          })
-          .join('');
-        const left = i ? 'on' : 'on later';
-        const text = d.likely.length
-          ? `Likely ${left} ${list(d.likely.map(hourRange))}${d.possible.length ? `; possibly ${list(d.possible.map(hourRange))}` : ''}.`
-          : d.possible.length
-            ? `No hour looks likely; possibly ${list(d.possible.map(hourRange))}.`
-            : i || f.hourNow < 23 ? `Unlikely to be on${i ? '' : ' for the rest of the day'}.` : '';
-        return `<div class="fc-row"><div class="fc-label"><b>${esc(dayName(d.day, i))}</b></div><div><div class="fc-strip">${cells}</div><div class="small" style="margin-top:5px">${esc(text)}</div></div></div>`;
-      })
-      .join('');
-    const axis = `<div class="fc-row"><div></div><div class="fc-strip fc-axis">${Array.from({ length: 24 }, (_, h) => `<span>${h % 3 ? '' : pad(h)}</span>`).join('')}</div></div>`;
-    const how = f.average ? 'keeps much the same hours from day to day' : f.every === 1 ? 'follows the day before' : f.every === 7 ? 'repeats by day of the week' : `repeats every ${f.every} days`;
-    const acc = Math.round(f.accuracy * 100);
-    const base = f.baseline === null ? null : Math.round(f.baseline * 100);
-    const weak = base !== null && acc - base < 5;
-    const guess = base === null ? '' : ` Always guessing whichever of on and off is commoner would have scored ${base}%.`;
-    // The nearest hours depend more on how long it has been on or off than on the usual schedule.
-    let next = '';
-    const usual = s.now && (s.now.on ? s.onStretch : s.offStretch);
-    if (usual && usual.n >= 3 && s.now.exact) {
-      const at = s.now.since + usual.median;
-      const state = s.now.on ? 'on' : 'off';
-      next = `<p style="margin:0 0 12px">It has been ${state} ${esc(since(s.now))} and usually stays ${state} about ${dur(usual.median)}, ${
-        at > Date.now() / 1000 ? `so expect it to ${s.now.on ? 'go off' : 'come back'} around <b>${esc(timeOf(at))}</b>` : `so it could ${s.now.on ? 'go off' : 'come back'} at any moment`
-      }.</p>`;
-    }
-    el.innerHTML = `<div class="card">${head}${next}
-      <div class="fc">${axis}${rows}</div>
-      <p class="small ${weak ? '' : 'faint'}" style="margin:12px 0 0">${weak ? `${icon('warn', 'style="width:14px;height:14px;vertical-align:-2px"')} <b>Treat this as a rough guess:</b> ${esc(s.name)} has not followed a steady schedule lately. ` : ''}
-        A stronger colour means a higher chance; hours already over today show what happened. ${weak ? '' : `In the last weeks ${esc(s.name)} ${how}.`}
-        Checked against the last two weeks, this way of forecasting was right for <b>${acc}%</b> of hours.${esc(guess)}</p></div>`;
+    $('#forecast', root).innerHTML = predictionCard(fc);
+    $('#cases', root).innerHTML = casesCard(fc);
   }
 
   // ---------- patterns ----------

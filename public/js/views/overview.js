@@ -1,6 +1,7 @@
 import { api } from '../api.js';
 import { $, $$, esc, icon, cssVar, fmtPower, fmtEnergy, fmtNumber, fmtAgo, fmtTime, fmtValue, startOfDay, localDateStr, modal, toast } from '../util.js';
 import { createTimeChart, renderSeriesTable } from '../charts.js';
+import { predictionCard } from '../prediction.js';
 import { ROLES, DEFAULT_NAMES, resolveFlow, describeParts, combineSeries, generatorEnergyToday, candidates, sourceNames, splitFlows, sourceOn, nodeVolts, phaseCount, toAmps, batteryInfo } from '../flow.js';
 
 const TH = 15; // watts below which a flow counts as idle
@@ -343,6 +344,7 @@ export async function mount(root, ctx) {
       try {
         localStorage.setItem('deye-station', stationId);
       } catch {}
+      loadPrediction();
       await loadEnergyRow();
       renderLive();
       loadChart();
@@ -366,6 +368,7 @@ export async function mount(root, ctx) {
           <div class="grid kpis" id="today" style="grid-template-columns:repeat(2,minmax(0,1fr));gap:10px"></div>
         </div>
       </div>
+      <div id="prediction"></div>
       <div class="card" style="padding:12px 14px">
         <div class="row">
           <button class="btn icon sm" id="prev-day" title="Previous day">‹</button>
@@ -695,6 +698,21 @@ export async function mount(root, ctx) {
     loadChart();
   };
 
+  // When the grid is likely to be on today and tomorrow. It is slower to work out than the rest
+  // (weeks of history), so it fills in on its own and never holds the page up.
+  let ticks = 0;
+  async function loadPrediction() {
+    const id = stationId;
+    try {
+      const data = await api.get('/api/event-log/forecast', { station: id });
+      const el = $('#prediction', root);
+      if (el && id === stationId) el.innerHTML = predictionCard(data, { link: true });
+    } catch {
+      /* the page works without it */
+    }
+  }
+  loadPrediction();
+
   await loadEnergyRow();
   renderLive();
   await loadChart();
@@ -706,6 +724,7 @@ export async function mount(root, ctx) {
       await loadEnergyRow();
       renderLive();
       if (localDateStr(st.day) === localDateStr(new Date())) loadChart();
+      if (++ticks % 5 === 0) loadPrediction();
     } catch {
       /* transient */
     }
