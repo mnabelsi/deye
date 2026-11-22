@@ -69,6 +69,12 @@ module.exports = {
     appSecret: process.env.EWELINK_APP_SECRET || '',
     server: process.env.EWELINK_SERVER || '',
   },
+  // Optional WAHA (WhatsApp HTTP API) defaults for notifications; the Settings page wins.
+  waha: {
+    url: process.env.WAHA_URL || '',
+    apiKey: process.env.WAHA_API_KEY || '',
+    session: process.env.WAHA_SESSION || '',
+  },
   defaultAdmin: {
     username: 'admin',
     password: '123456',

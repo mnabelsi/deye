@@ -226,6 +226,44 @@ module.exports = [
     PRIMARY KEY (id)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
+  // WhatsApp notifications (sent through a WAHA server): what to tell whom. rule is JSON; state is
+  // the engine's memory between runs (what it last saw, so it notices changes).
+  `CREATE TABLE IF NOT EXISTS notification_rules (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+    name VARCHAR(191) NOT NULL,
+    enabled TINYINT(1) NOT NULL DEFAULT 1,
+    rule MEDIUMTEXT NOT NULL,
+    state MEDIUMTEXT NULL,
+    sort_index INT NOT NULL DEFAULT 0,
+    checked_ts INT UNSIGNED NULL,
+    sent_ts INT UNSIGNED NULL,
+    last_note VARCHAR(512) NULL,
+    created_by VARCHAR(64) NULL,
+    created_ts INT UNSIGNED NOT NULL,
+    updated_ts INT UNSIGNED NOT NULL,
+    PRIMARY KEY (id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+
+  // Every notification and how it went. status: pending (to send, or to retry while WAHA can't be
+  // reached) → sent | partial | failed; held (quiet hours, sent together when they end); skipped.
+  // recipients is JSON [{ name, chatId }].
+  `CREATE TABLE IF NOT EXISTS notification_log (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+    rule_id INT UNSIGNED NULL,
+    rule_name VARCHAR(191) NULL,
+    kind VARCHAR(12) NOT NULL DEFAULT 'event',
+    ts INT UNSIGNED NOT NULL,
+    recipients TEXT NULL,
+    text TEXT NOT NULL,
+    status VARCHAR(12) NOT NULL,
+    message VARCHAR(1024) NULL,
+    attempts INT UNSIGNED NOT NULL DEFAULT 0,
+    sent_ts INT UNSIGNED NULL,
+    PRIMARY KEY (id),
+    KEY idx_notification_log_ts (ts),
+    KEY idx_notification_log_status (status, ts)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+
   `CREATE TABLE IF NOT EXISTS collector_runs (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     kind VARCHAR(24) NOT NULL,

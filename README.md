@@ -65,6 +65,14 @@ Built with plain **Node.js + Express** (no build step) so it deploys as-is on **
   for a while, run "otherwise" actions when they stop holding, and keep devices in place if someone switches them
   by hand. The editor shows what each condition sees right now, and every run is logged with the reason.
   See [How automations work](#how-automations-work).
+- **WhatsApp notifications** – messages through your own [WAHA](https://waha.devlike.pro) server when the grid or
+  the generator comes on or goes off (with how long it was off or on), when the battery reaches or drops to levels
+  you choose, when your own conditions hold (the same conditions as automations), and a **daily summary** (today's
+  energy, grid and generator hours, battery, tomorrow's grid forecast). Also for trouble: no new inverter data,
+  DeyeCloud collection failing, smart devices going offline, automations failing, inverter settings changed.
+  Each notification picks its recipients (numbers or WhatsApp groups), can have its own message with placeholders
+  such as `{soc}` and `{load}`, a cooldown and what to do in **quiet hours** (hold and send together afterwards,
+  skip, or send anyway), and shows a live preview. See [WhatsApp notifications](#whatsapp-notifications-waha).
 - **Complete history** – polls DeyeCloud every few minutes, **imports past history** from DeyeCloud
   day by day, and **fills gaps automatically** if the app was asleep.
 - **Accounts** – login with default **`admin` / `123456`** (change it on first login), extra users (admin or viewer).
@@ -108,6 +116,19 @@ npm run mock:ewelink   # starts http://localhost:4200
 In Settings → **Smart devices (eWeLink)** enter App ID `demo`, App Secret `demo`, choose **Server → Custom URL**
 `http://localhost:4200`, save, then press **Connect eWeLink account** and sign in on the mock page. With the
 DeyeCloud mock running as well, automations can be tried against its grid, generator and battery.
+
+### Try WhatsApp notifications without WhatsApp
+
+A mock WAHA server is included; it shows every message it "sends" on a page:
+
+```bash
+npm run mock:waha      # starts http://localhost:4300
+```
+
+On the **Notifications** page enter the server `http://localhost:4300`, API key `demo` and session `default`, add a
+recipient with any number (numbers starting with 999 count as not on WhatsApp), and open http://localhost:4300 to see
+the messages. `http://localhost:4300/mock/down?seconds=120` makes it unavailable for a while, to see messages wait
+and go out when it is back.
 
 ## Deploying on Hostinger
 
@@ -172,6 +193,10 @@ The cron call and the built-in scheduler share a database lock, so they never ru
 
 See [Smart devices (eWeLink)](#smart-devices-ewelink) below.
 
+### 6. WhatsApp notifications (optional)
+
+See [WhatsApp notifications (WAHA)](#whatsapp-notifications-waha) below.
+
 ### Updating
 
 Push to the connected branch (or upload a new zip) and redeploy from hPanel. Your data and settings live in
@@ -192,6 +217,7 @@ settings are required; everything else is managed on the Settings page.
 | `DISABLE_SCHEDULER` | `0` | `1` = collect only via cron / CLI |
 | `DEYE_*` | – | Optional DeyeCloud defaults (`DEYE_BASE_URL`, `DEYE_APP_ID`, `DEYE_APP_SECRET`, `DEYE_EMAIL`, `DEYE_PASSWORD`, …) |
 | `EWELINK_APP_ID`, `EWELINK_APP_SECRET` | – | Optional eWeLink app credentials (normally entered on the Settings page) |
+| `WAHA_URL`, `WAHA_API_KEY`, `WAHA_SESSION` | – | Optional WAHA server for WhatsApp notifications (normally entered on the Notifications page) |
 
 Command-line helpers (e.g. over SSH):
 
@@ -259,6 +285,54 @@ actions:
   switch is retried as well.
 - **Pause all** on the Automations page stops every rule at once.
 
+## WhatsApp notifications (WAHA)
+
+[WAHA](https://waha.devlike.pro) (WhatsApp HTTP API) runs a WhatsApp session on your own server, and the dashboard
+asks it to send messages. Messages come from the WhatsApp account signed in on WAHA, so a spare number (or WhatsApp
+Business) works best; you can then message your own number or a group.
+
+1. Run WAHA and start a session (the WAHA dashboard shows a QR code to scan with WhatsApp on the phone). Note its
+   address, its API key (`WAHA_API_KEY` / `WHATSAPP_API_KEY` in WAHA's settings) and the session name (`default`).
+2. On the **Notifications** page, enter the address as the dashboard's server can reach it (e.g.
+   `http://192.168.1.20:3000`, or `https://waha.your-domain.com` if the dashboard is hosted elsewhere), the API key and
+   the session, then **Save** and **Test connection**. It shows whether the session is signed in and which number sends.
+3. Add **recipients**: a number with its country code (`+961 70 123 456`) or one of your WhatsApp groups
+   (**Pick a WhatsApp group…**). Each can be sent a test message, or turned off for a while.
+4. Add **notifications** — start from an idea (grid on/off, battery low, battery full, daily summary, inverter
+   offline…) or choose the kind yourself:
+
+| Kind | Sends a message when… |
+|---|---|
+| Grid or generator on / off | it comes on and/or goes off, optionally only after it stays that way for N minutes. Says how long it was off or on, the battery and the home load. |
+| Battery level | the battery reaches and/or drops to chosen levels (e.g. 20 % and 100 %). A level counts again once the battery moves 2 % back. |
+| My own condition | any mix of automation conditions holds (for N minutes), and optionally when it stops: *load above 3 kW while the grid is off*, *battery under 30 % at night*, a smart device's reading… |
+| Daily summary | at a set time on chosen days: today's solar, home, grid, generator and battery energy, how long the grid and generator were on and how many cuts, the battery, and the grid prediction for tomorrow. |
+| Inverter stops reporting | no new reading has arrived for N minutes, and when data is back. |
+| Data collection fails | N polls of DeyeCloud in a row failed, and when it works again. |
+| Smart device offline | any (or one) eWeLink device goes offline / comes back. |
+| Automation ran or failed | an automation fails, or every time it switches something. |
+| Inverter setting changed | someone changes an inverter setting, or a change fails. |
+
+Each notification also has its recipients (none ticked = everyone turned on), an optional **message** of its own
+with placeholders (`{event}` is the standard message; `{soc}`, `{load}`, `{solar}`, `{grid}`, `{grid_power}`,
+`{generator}`, `{battery_power}`, `{duration}`, `{time}`, `{date}`, `{station}`, `{name}`, `{level}`), a
+**cooldown** (at most one message every N minutes) and what to do in **quiet hours**: hold the message and send all
+of them together when quiet hours end, skip it, or send it anyway. The editor previews the message with today's
+values; **Test** on a saved notification sends that preview.
+
+How it behaves:
+
+- Notifications are checked every minute with the automations (by the built-in scheduler and by the cron job), from
+  the same readings, so "grid on" means what the Overview shows. Inverter readings arrive from DeyeCloud every few
+  minutes, so a change can take that long to be noticed. While the inverter's data is stale, the grid, battery and
+  condition notifications wait rather than report old values; the *Inverter stops reporting* notification covers it.
+- A new or changed notification first notes how things are and then reports **changes**, so saving one doesn't
+  send anything until something happens. Turning notifications off (Delivery → *Send notifications*) keeps them
+  watching without sending.
+- Messages are queued in the database and sent from there. If WAHA can't be reached they are retried for up to an
+  hour; if WAHA refuses one (e.g. a number not on WhatsApp) it is marked failed. Every message is listed on the page
+  with its result.
+
 ## How it works
 
 ```
@@ -297,6 +371,7 @@ live WebSocket (`userOnline`, `update`, `sysmsg`).
 | `ewelink_devices` | Smart devices from eWeLink with their last known state; their readings and on/off changes are stored in `metrics` / `readings` / `text_readings` (source type `ewelink`) |
 | `ewelink_actions` | Every command sent to a smart device: by whom (person or automation) and the result (kept a year) |
 | `automations`, `automation_runs` | Automation rules with their state, and what each did and why (kept 180 days) |
+| `notification_rules`, `notification_log` | WhatsApp notification rules with their state, and every message with its recipients and result (kept 180 days) |
 | `users`, `settings` | Accounts, preferences and configuration |
 
 **Storage estimate:** a hybrid inverter reports roughly 60–150 numeric readings. At 5-minute polling that is
@@ -331,6 +406,8 @@ page). The model is plain JavaScript in `public/js/insights-model.js` and runs i
   history and automations read-only. The eWeLink App Secret and tokens are never sent to the browser.
 - Only admin accounts can change inverter settings; viewers see them read-only. Every change is validated
   on the server against safe ranges, confirmed in a dialog listing old → new values, and logged with the user.
+- Only admin accounts can see and change WhatsApp notifications (they hold phone numbers). The WAHA API key is never
+  sent to the browser.
 - Change the default `admin` / `123456` password straight away. The dashboard reminds you until you do.
 - Passwords are hashed with bcrypt. Sessions are HMAC-signed, HTTP-only, SameSite cookies, and changing
   a password signs out its old sessions. Login attempts are rate-limited.

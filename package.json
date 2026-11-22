@@ -10,6 +10,7 @@
     "backfill": "node scripts/backfill.js",
     "mock": "node scripts/mock-deye.js",
     "mock:ewelink": "node scripts/mock-ewelink.js",
+    "mock:waha": "node scripts/mock-waha.js",
     "check": "node --check server.js && node scripts/check-syntax.js"
   },
   "engines": {
