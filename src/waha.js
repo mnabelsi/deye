@@ -56,7 +56,19 @@ async function request(cfg, method, path, body) {
   }
   if (!res.ok) {
     const detail = data && typeof data === 'object' ? data.message || data.error || (data.exception && data.exception.message) : String(text || '').slice(0, 200);
-    if (res.status === 401 || res.status === 403) throw new WahaError('WAHA refused the API key (check it in Settings)', res.status);
+    // 401: no key or a wrong one. 403: a real key that may not do this (e.g. a session key used
+    // for another session, or with its read/send permission turned off).
+    if (res.status === 401) {
+      throw new WahaError(
+        cfg.apiKey
+          ? 'WAHA says the API key is wrong (401). Copy the whole key again from WAHA (use its copy button, not the masked text) and paste it here.'
+          : 'WAHA needs an API key (401). Enter it on this page.',
+        401
+      );
+    }
+    if (res.status === 403) {
+      throw new WahaError(`WAHA accepted the API key but it isn't allowed to do this (403${detail ? `: ${detail}` : ''}). If it is a session key, check that it is for session "${cfg.session}" and allows reading and sending.`, 403);
+    }
     if (res.status === 404 && /\/api\/sessions\//.test(path)) throw new WahaError(`WAHA has no session called "${cfg.session}"`, 404);
     throw new WahaError(`WAHA answered ${res.status}${detail ? `: ${Array.isArray(detail) ? detail.join(', ') : detail}` : ''}`, res.status);
   }
