@@ -36,6 +36,14 @@ const DEFAULTS = {
   automations_enabled: '1',
   automation_timezone: '',
   event_soc_levels: '50,80,100',
+  waha_url: '',
+  waha_api_key: '',
+  waha_session: '',
+  notify_enabled: '1',
+  notify_recipients: '[]',
+  notify_quiet_from: '',
+  notify_quiet_to: '',
+  notify_title: '',
 };
 
 async function loadAll(force) {
@@ -117,6 +125,17 @@ async function getEwelinkConfig() {
   };
 }
 
+// WAHA (WhatsApp HTTP API) server for notifications; the Settings page wins over the environment.
+async function getWahaConfig() {
+  const s = await loadAll();
+  const env = config.waha;
+  return {
+    url: (s.waha_url || env.url || '').trim().replace(/\/+$/, ''),
+    apiKey: s.waha_api_key || env.apiKey,
+    session: (s.waha_session || env.session || 'default').trim() || 'default',
+  };
+}
+
 const isEwelinkConfigured = (c) => Boolean(c.appId && c.appSecret);
 const isEwelinkConnected = (c) => Boolean(isEwelinkConfigured(c) && c.rt && c.region);
 
@@ -136,6 +155,7 @@ module.exports = {
   getEwelinkConfig,
   isEwelinkConfigured,
   isEwelinkConnected,
+  getWahaConfig,
   sha256,
   invalidate: () => { cache = null; },
 };

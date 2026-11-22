@@ -550,4 +550,4 @@ async function runNow(id, branch) {
   return act(row, rule, 'test', actions, snap, `Run by hand (${branch === 'else' ? '"otherwise" actions' : 'actions'})`);
 }
 
-module.exports = { tick, timeZone, setTimeZone, cleanCondition, powerValue, compare, validZone, SOURCE_IDLE, OPS, cleanRule, check, runNow, toApi, evaluateRule, NODE_LABELS, POWER_NODES };
+module.exports = { tick, timeZone, setTimeZone, cleanCondition, powerValue, compare, validZone, SOURCE_IDLE, OPS, cleanRule, check, runNow, toApi, evaluateRule, snapshot, localClock, minutesOf, NODE_LABELS, POWER_NODES, DAY_NAMES };

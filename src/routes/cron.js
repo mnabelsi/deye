@@ -7,6 +7,7 @@ const config = require('../config');
 const collector = require('../collector');
 const ewelink = require('../ewelink');
 const automations = require('../automations');
+const notifications = require('../notifications');
 
 const router = express.Router();
 
@@ -22,9 +23,10 @@ router.all('/collect', async (req, res) => {
   const given = req.query.key || req.get('X-Cron-Key');
   if (!safeEqual(given, expected)) return res.status(403).json({ error: 'Invalid cron key' });
   const r = await collector.tick({ trigger: 'cron', force: req.query.force === '1' });
-  // Smart devices and automations ride along, so they keep working when the host idles the app.
+  // Smart devices, automations and notifications ride along, so they keep working when the host idles the app.
   r.ewelink = await ewelink.tick({ trigger: 'cron' }).catch((err) => ({ status: 'error', message: err.message }));
   r.automations = await automations.tick().catch((err) => ({ status: 'error', message: err.message }));
+  r.notifications = await notifications.tick().catch((err) => ({ status: 'error', message: err.message }));
   res.json(r);
 });
 

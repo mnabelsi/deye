@@ -4,10 +4,12 @@ const collector = require('./collector');
 const ewelink = require('./ewelink');
 const live = require('./ewelink/live');
 const automations = require('./automations');
+const notifications = require('./notifications');
 
 // In-process scheduler: ticks every minute. The collector decides whether a poll is due
 // (based on the interval stored in MySQL), so cron calls and multiple workers don't double up.
-// After it, smart devices sync when due (and keep their live connection) and automations run.
+// After it, smart devices sync when due (and keep their live connection), automations run, and
+// WhatsApp notifications are checked and sent.
 const TICK_MS = 60 * 1000;
 let timer = null;
 let running = false;
@@ -32,6 +34,11 @@ async function runOnce() {
     await automations.tick();
   } catch (err) {
     console.error('[automations] tick failed:', err.message);
+  }
+  try {
+    await notifications.tick();
+  } catch (err) {
+    console.error('[notifications] tick failed:', err.message);
   } finally {
     running = false;
     nextAt = Date.now() + TICK_MS;
